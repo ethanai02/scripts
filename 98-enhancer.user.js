@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.5(2024-08-14)
+// @version      0.0.6(2024-08-15)
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -45,8 +45,8 @@
 // @grant        GM_deleteValue
 // @grant        GM_listValues
 // @icon         https://sehuatang.net/favicon.ico
-// @downloadURL https://update.greasyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.user.js
-// @updateURL https://update.greasyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
+// @downloadURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.user.js
+// @updateURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
 // ==/UserScript==
 
 function initGM() {
@@ -131,8 +131,12 @@ function initGM() {
         background: none;
     }
     .quick-button:hover { text-decoration: underline; }
+    .favorite-button, .block-button {
+        border: 1px solid;
+        cursor: pointer;
+    }
     .favorite-button {
-        color: #ff4500;
+        background: #FEAE10;
     }
 `;
     document.head.appendChild(style);
@@ -266,11 +270,18 @@ function initGM() {
     const currentUrl = window.location.href;
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
     const isPostListPage = /fid=\d+/.test(currentUrl);
-    const favoriteUsersKey = 'favoriteUsers';
-    let favoriteUsers = await GM.getValue(favoriteUsersKey, {});
-    const updateFavoriteUsers = async () => {
-        await GM.setValue(favoriteUsersKey, favoriteUsers);
-    };
+
+    const createUserListStore = async (storeName) => {
+        const usersKey = storeName;
+        let users = await GM.getValue(usersKey, {});
+        const updateStore = async () => {
+            await GM.setValue(usersKey, users);
+        };
+        return { users, updateStore }
+    }
+
+    const { users: favoriteUsers, updateStore: updateFavoriteUsers } = await createUserListStore('favoriteUsers')
+    const { users: blockedUsers, updateStore: updateBlockedUsers } = await createUserListStore('blockedUsers')
 
     if (isUserProfilePage) {
         const userProfileSelector = '#uhd .mt';
@@ -278,6 +289,7 @@ function initGM() {
         if (userProfileElement) {
             const username = userProfileElement.textContent.trim();
             let isFavorited = !!favoriteUsers[username];
+            let isBlocked = !!blockedUsers[username];
 
             const favoriteButton = document.createElement('button');
             favoriteButton.innerText = isFavorited ? '取消收藏' : '收藏用户';
@@ -296,19 +308,54 @@ function initGM() {
                         favoriteUsers[username] = true;
                         favoriteButton.innerText = '取消收藏';
                         isFavorited = true;
+
+                        delete blockedUsers[username];
+                        blokedButton.innerText = '屏蔽用户';
+                        isBlocked = false;
+
                     }
                 }
+                updateFavoriteUsers();
+                updateBlockedUsers();
+            });
+
+            const blokedButton = document.createElement('button');
+            blokedButton.innerText = isBlocked ? '取消屏蔽' : '屏蔽用户';
+            blokedButton.className = 'quick-button block-button';
+            blokedButton.style.marginLeft = '10px';
+
+            blokedButton.addEventListener('click', () => {
+                if (isBlocked) {
+                    if (confirm(`确定取消屏蔽用户 ${username} 吗？`)) {
+                        delete blockedUsers[username];
+                        blokedButton.innerText = '屏蔽用户';
+                        isBlocked = false;
+
+                    }
+                } else {
+                    if (confirm(`确定屏蔽用户 ${username} 吗？`)) {
+                        blockedUsers[username] = true;
+                        blokedButton.innerText = '取消屏蔽';
+                        isBlocked = true;
+
+                        delete favoriteUsers[username];
+                        favoriteButton.innerText = '收藏用户';
+                        isFavorited = false;
+                    }
+                }
+                updateBlockedUsers();
                 updateFavoriteUsers();
             });
 
             userProfileElement.appendChild(favoriteButton);
+            userProfileElement.appendChild(blokedButton);
         }
     }
 
     const highlightNewPosts = () => {
-        const postElements = document.querySelectorAll('tbody[id^="normalthread_"] td.by');
-
-        postElements.forEach(postElement => {
+        const postsList = document.querySelectorAll('tbody[id^="normalthread_"]')
+        postsList.forEach(postItem => {
+            const postElement = postItem.querySelector('tr td.by:nth-child(3)');
             const citeElement = postElement.querySelector('cite a');
             const spanElement = postElement.querySelector('span.xi1 span');
 
@@ -323,7 +370,12 @@ function initGM() {
             if (spanElement && spanElement.title === today) {
                 spanElement.style.fontWeight = 'bold';
             }
-        });
+
+            // Hide blocked users' posts
+            if (citeElement && blockedUsers[citeElement.textContent.trim()]) {
+                postItem.style.display = 'none';
+            }
+        })
     };
 
     if (isPostListPage) {
