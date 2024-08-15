@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.6(2024-08-15)
+// @version      0.0.7(2024-08-15)
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -352,12 +352,12 @@ function initGM() {
         }
     }
 
-    const highlightNewPosts = () => {
+    const highOrHidePostLists = () => {
         const postsList = document.querySelectorAll('tbody[id^="normalthread_"]')
         postsList.forEach(postItem => {
             const postElement = postItem.querySelector('tr td.by:nth-child(3)');
             const citeElement = postElement.querySelector('cite a');
-            const spanElement = postElement.querySelector('span.xi1 span');
+            const topicTimeSpan = postElement.querySelector('span.xi1 span');
 
             // Highling favorite users
             if (citeElement && favoriteUsers[citeElement.textContent.trim()]) {
@@ -365,27 +365,46 @@ function initGM() {
                 citeElement.style.color = 'dodgerblue'; // Change color to dodgerblue
             }
 
-            // Highlight today's new posts
-            const today = new Date().toISOString().split('T')[0];
-            if (spanElement && spanElement.title === today) {
-                spanElement.style.fontWeight = 'bold';
-            }
-
             // Hide blocked users' posts
             if (citeElement && blockedUsers[citeElement.textContent.trim()]) {
                 postItem.style.display = 'none';
             }
+
+            // Highlight today's new posts
+            const today = new Date().toISOString().split('T')[0];
+            if (topicTimeSpan && topicTimeSpan.title === today) {
+                topicTimeSpan.style.fontWeight = 'bold';
+            }
         })
     };
 
+    const isHomepage = window.location.pathname === '/';
+
+    if (isHomepage) {
+        const posts = document.querySelectorAll('.dxb_bc li')
+        posts.forEach(post => {
+            const username = post.querySelector('em a');
+            // Highling favorite users
+            if (username && favoriteUsers[username.textContent.trim()]) {
+                username.style.fontWeight = 'bold';
+                username.style.color = 'dodgerblue'; // Change color to dodgerblue
+            }
+
+            // Hide blocked users' posts
+            if (username && blockedUsers[username.textContent.trim()]) {
+                post.style.display = 'none';
+            }
+        })
+    }
+
     if (isPostListPage) {
         // Initial call to highlight already loaded content
-        highlightNewPosts();
+        highOrHidePostLists();
 
         // Use a MutationObserver to handle dynamically loaded content
         const observer = new MutationObserver((mutations) => {
             mutations.forEach(mutation => {
-                highlightNewPosts();
+                highOrHidePostLists();
             });
         });
 
