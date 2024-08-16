@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.7(2024-08-15)
+// @version      0.0.8(2024-08-16)
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -77,6 +77,13 @@ function initGM() {
         };
     }
 }
+
+const createLoadingIndicator = (message) => {
+    const indicator = document.createElement('div');
+    indicator.className = 'loading-indicator';
+    indicator.textContent = message;
+    return indicator;
+};
 
 (async function () {
     'use strict';
@@ -271,17 +278,16 @@ function initGM() {
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
     const isPostListPage = /fid=\d+/.test(currentUrl);
 
-    const createUserListStore = async (storeName) => {
-        const usersKey = storeName;
-        let users = await GM.getValue(usersKey, {});
+    const createToggleKVStore = async (storeName) => {
+        let data = await GM.getValue(storeName, {});
         const updateStore = async () => {
-            await GM.setValue(usersKey, users);
+            await GM.setValue(storeName, data);
         };
-        return { users, updateStore }
+        return { data, updateStore }
     }
 
-    const { users: favoriteUsers, updateStore: updateFavoriteUsers } = await createUserListStore('favoriteUsers')
-    const { users: blockedUsers, updateStore: updateBlockedUsers } = await createUserListStore('blockedUsers')
+    const { data: favoriteUsers, updateStore: updateFavoriteUsers } = await createToggleKVStore('favoriteUsers')
+    const { data: blockedUsers, updateStore: updateBlockedUsers } = await createToggleKVStore('blockedUsers')
 
     if (isUserProfilePage) {
         const userProfileSelector = '#uhd .mt';
@@ -409,6 +415,275 @@ function initGM() {
         });
 
         observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    const isSearchPage = /\/search\.php\?.*searchmd5=.*/.test(currentUrl);
+    if (isSearchPage) {
+        const { data: hiddenSections, updateStore: updateHiddenSections } = await createToggleKVStore('hiddenSections');
+
+        const threadList = document.querySelectorAll('#threadlist .pbw');
+        if (!threadList.length) return;
+
+        const sectionMap = new Map();
+
+        const processThread = (thread) => {
+            const sectionLink = thread.querySelector('a[href*="fid="]');
+            if (sectionLink) {
+                const fid = new URL(sectionLink.href).searchParams.get('fid');
+                const sectionName = sectionLink.textContent.trim();
+
+                if (!sectionMap.has(fid)) {
+                    sectionMap.set(fid, { name: sectionName, elements: [] });
+                }
+                sectionMap.get(fid).elements.push(thread);
+            }
+        };
+
+        const applyFilterToNewThreads = (newThreads) => {
+            sectionMap.forEach((section, fid) => {
+                if (hiddenSections[fid]) {
+                    newThreads.forEach(thread => {
+                        const link = thread.querySelector(`a[href*="fid=${fid}"]`);
+                        if (link) thread.style.display = 'none';
+                    });
+                }
+            });
+        };
+
+        threadList.forEach(processThread);
+
+        applyFilterToNewThreads(threadList);
+
+        const updateFilterButtons = () => {
+            sectionMap.forEach((section, fid) => {
+                const existingButton = document.querySelector(`.filter-button[data-fid="${fid}"]`);
+
+                if (existingButton) {
+                    const countElement = existingButton.querySelector('.filter-button-count');
+                    const countNum = section.elements.length;
+                    countElement.textContent = countNum <= 99 ? countNum : '99+';
+
+                    existingButton.classList.toggle('hidden', hiddenSections[fid]);
+                } else {
+                    addButton(section, fid);
+                }
+            });
+        };
+
+        const addButton = (section, fid) => {
+            const button = document.createElement('a');
+            button.className = 'filter-button';
+            button.textContent = section.name;
+            button.dataset.fid = fid;
+            button.classList.toggle('hidden', hiddenSections[fid]);
+
+            const countElement = document.createElement('span');
+            countElement.className = 'filter-button-count';
+            countElement.textContent = section.elements.length;
+            button.insertBefore(countElement, button.firstChild);
+
+            button.addEventListener('click', () => {
+                hiddenSections[fid] = !hiddenSections[fid];
+                section.elements.forEach(thread => {
+                    thread.style.display = hiddenSections[fid] ? 'none' : '';
+                });
+                button.classList.toggle('hidden', hiddenSections[fid]);
+                updateHiddenSections();
+            });
+
+            filterContainer.appendChild(button);
+        };
+
+        const filterContainer = document.createElement('div');
+        filterContainer.className = 'filter-container';
+        document.body.appendChild(filterContainer);
+
+        updateFilterButtons();
+
+        let isLoading = false;
+        let lastLoadedTime = Date.now();
+
+        const loadNextPage = () => {
+            if (isLoading) return;
+
+            const nextPageLink = document.querySelector('.pg a.nxt');
+            if (!nextPageLink) return;
+
+            isLoading = true;
+            const loadingIndicator = createLoadingIndicator('加载中...');
+            document.body.appendChild(loadingIndicator);
+
+            const loadTime = 3000;
+            const elapsedTime = Date.now() - lastLoadedTime;
+            const waitTime = Math.max(0, loadTime - elapsedTime);
+
+            setTimeout(() => {
+                fetch(nextPageLink.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+
+                        const errorMessage = doc.querySelector('#messagetext.alert_error');
+                        if (errorMessage && errorMessage.textContent.includes('刷新过于频繁')) {
+                            showRetryIndicator();
+                            setTimeout(loadNextPage, 3000);
+                            return;
+                        }
+
+                        const newThreads = doc.querySelectorAll('#threadlist .pbw');
+                        newThreads.forEach(thread => {
+                            thread.classList.add('fade-in'); // 添加渐入动效类
+                            document.querySelector('#threadlist ul').appendChild(thread);
+                            processThread(thread);
+                        });
+
+                        applyFilterToNewThreads(newThreads);
+
+                        const newPagination = doc.querySelector('.pgs.cl.mbm');
+                        const pagination = document.querySelector('.pgs.cl.mbm');
+                        if (pagination && newPagination) {
+                            pagination.replaceWith(newPagination);
+                        }
+
+                        updateFilterButtons();
+                        loadingIndicator.remove();
+                        lastLoadedTime = Date.now();
+                    }).finally(() => {
+                        isLoading = false;
+                    });
+            }, waitTime);
+        };
+
+        const showRetryIndicator = () => {
+            const retryIndicator = createLoadingIndicator('翻页过快，即将重试...');
+            document.body.appendChild(retryIndicator);
+
+            setTimeout(() => {
+                retryIndicator.remove();
+                loadNextPage();
+            }, 3000);
+        };
+
+        const loadNextPageIfNeeded = () => {
+            const scrollPosition = window.innerHeight + window.scrollY;
+            const threshold = document.documentElement.scrollHeight - window.innerHeight / 2;
+
+            if (scrollPosition >= threshold && !isLoading) {
+                loadNextPage();
+            }
+        };
+
+        window.addEventListener('wheel', (event) => {
+            if (event.deltaY > 0) {
+                loadNextPageIfNeeded();
+            }
+        });
+
+        window.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                loadNextPageIfNeeded();
+            }
+        });
+
+        const style = document.createElement('style');
+        style.textContent = `
+        .filter-container {
+            position: fixed;
+            right: 10px;
+            top: 140px;
+            display: flex;
+            flex-direction: column;
+            z-index: 9999;
+            width: 140px;
+        }
+
+        .filter-button {
+            color: #333;
+            border: none;
+            padding: 1px 2px;
+            box-shadow: 2px 2px 1px 0 #0009;
+            white-space: pre;
+            font-size: 14px;
+            line-height: 18px;
+            margin: 8px 0;
+            cursor: pointer;
+            outline: 2px solid lightblue;
+            font-weight: bold;
+            background: #EEEE;
+            position: relative;
+            padding-left: 32px;
+        }
+
+        .filter-button.hidden {
+            color: #CCC;
+            background: #999C;
+            text-decoration: line-through;
+            outline-color: #999;
+        }
+
+        .filter-button:hover {
+            outline-color: deepskyblue;
+        }
+        .filter-button-count {
+            color: royalblue;
+            padding-right: 10px;
+            position: absolute;
+            left: 4px;
+            transition: transform 0.3s ease, color 0.3s ease;
+        }
+
+        .hidden .filter-button-count {
+            color: #CCC;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        .fade-in {
+            opacity: 0;
+            animation: fadeIn 1s forwards;
+        }
+
+        .loading-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 12px 18px;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .loading-indicator::before {
+            content: '';
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 3px solid #fff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        `;
+
+        document.head.appendChild(style);
     }
 
 })();
