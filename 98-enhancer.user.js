@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.10(2024-08-17)
+// @version      0.0.11
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -276,7 +276,7 @@ const createLoadingIndicator = (message) => {
    */
     const currentUrl = window.location.href;
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
-    const isPostListPage = /fid=\d+/.test(currentUrl);
+    const isPostListPage = /fid=\d+/.test(currentUrl) || /forum-(\d+)-\d+\.html/.test(currentUrl);
 
     const createToggleKVStore = async (storeName) => {
         let data = await GM.getValue(storeName, {});
@@ -426,12 +426,28 @@ const createLoadingIndicator = (message) => {
 
         const sectionMap = new Map();
 
-        const processThread = (thread) => {
-            const sectionLink = thread.querySelector('a[href*="fid="]');
-            if (sectionLink) {
-                const fid = new URL(sectionLink.href).searchParams.get('fid');
-                const sectionName = sectionLink.textContent.trim();
+        // 兼容两种分区地址格式（for edge）
+        const querySectionLink = (thread, fid) => {
+            const linkSelectors = fid ? 
+                [`a[href*="fid=${fid}"]`, `a[href^="forum-${fid}"]`] : 
+                ['a[href*="fid="]', 'a[href^="forum-"]'];
 
+            for (const selector of linkSelectors) {
+                const link = thread.querySelector(selector);
+                if (link) {
+                    const url = new URL(link.href);
+                    const fidValue = fid || url.searchParams.get('fid') || url.pathname.match(/forum-(\d+)-\d+\.html/)?.[1];
+                    const sectionName = link.textContent.trim();
+                    if (fidValue) return { sectionLink: link, fid: fidValue, sectionName };
+                }
+            }
+            return null;
+        };
+
+        const processThread = (thread) => {
+            const link = querySectionLink(thread)
+            if (link) {
+                const { fid, sectionName } = link
                 if (!sectionMap.has(fid)) {
                     sectionMap.set(fid, { name: sectionName, elements: [] });
                 }
@@ -443,7 +459,7 @@ const createLoadingIndicator = (message) => {
             sectionMap.forEach((section, fid) => {
                 if (hiddenSections[fid]) {
                     newThreads.forEach(thread => {
-                        const link = thread.querySelector(`a[href*="fid=${fid}"]`);
+                        const link = querySectionLink(thread, fid)
                         if (link) thread.style.display = 'none';
                     });
                 }
@@ -454,6 +470,7 @@ const createLoadingIndicator = (message) => {
 
         applyFilterToNewThreads(threadList);
 
+        // 新建 button、更新数值
         const updateFilterButtons = () => {
             sectionMap.forEach((section, fid) => {
                 const existingButton = document.querySelector(`.filter-button[data-fid="${fid}"]`);
@@ -462,8 +479,7 @@ const createLoadingIndicator = (message) => {
                     const countElement = existingButton.querySelector('.filter-button-count');
                     const countNum = section.elements.length;
                     countElement.textContent = countNum <= 99 ? countNum : '99+';
-
-                    existingButton.classList.toggle('hidden', hiddenSections[fid]);
+                    existingButton.classList.toggle('hidden', !!hiddenSections[fid]);
                 } else {
                     addFilterSectionButton(section, fid);
                 }
