@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.9(2024-08-17)
+// @version      0.0.10(2024-08-17)
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -590,8 +590,8 @@ const createLoadingIndicator = (message) => {
         style.textContent = `
         .filter-container {
             position: fixed;
-            right: 10px;
-            top: 140px;
+            left: calc(50vw + 200px);
+            top: 105px;
             display: flex;
             flex-direction: column;
             z-index: 9999;
