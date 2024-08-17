@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.8(2024-08-16)
+// @version      0.0.9(2024-08-17)
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -465,17 +465,17 @@ const createLoadingIndicator = (message) => {
 
                     existingButton.classList.toggle('hidden', hiddenSections[fid]);
                 } else {
-                    addButton(section, fid);
+                    addFilterSectionButton(section, fid);
                 }
             });
         };
 
-        const addButton = (section, fid) => {
+        const addFilterSectionButton = (section, fid) => {
             const button = document.createElement('a');
             button.className = 'filter-button';
             button.textContent = section.name;
             button.dataset.fid = fid;
-            button.classList.toggle('hidden', hiddenSections[fid]);
+            button.classList.toggle('hidden', !!hiddenSections[fid]);
 
             const countElement = document.createElement('span');
             countElement.className = 'filter-button-count';
@@ -487,7 +487,7 @@ const createLoadingIndicator = (message) => {
                 section.elements.forEach(thread => {
                     thread.style.display = hiddenSections[fid] ? 'none' : '';
                 });
-                button.classList.toggle('hidden', hiddenSections[fid]);
+                button.classList.toggle('hidden', !!hiddenSections[fid]);
                 updateHiddenSections();
             });
 
@@ -630,7 +630,6 @@ const createLoadingIndicator = (message) => {
             padding-right: 10px;
             position: absolute;
             left: 4px;
-            transition: transform 0.3s ease, color 0.3s ease;
         }
 
         .hidden .filter-button-count {
