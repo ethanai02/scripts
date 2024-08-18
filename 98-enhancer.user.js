@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.11
+// @version      0.0.12
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -40,10 +40,12 @@
 // @grant        GM.setValue
 // @grant        GM.deleteValue
 // @grant        GM.listValues
+// @grant        GM.addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
+// @grant        GM_addStyle
 // @icon         https://sehuatang.net/favicon.ico
 // @downloadURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.user.js
 // @updateURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
@@ -65,6 +67,7 @@ function initGM() {
                 return await GM.deleteValue(window.GM, key);
             },
             listValues: GM.listValues,
+            addStyle: GM.addStyle
         };
     } else {
         return {
@@ -74,6 +77,7 @@ function initGM() {
                 return await GM_deleteValue(key);
             },
             listValues: GM_listValues,
+            addStyle: GM_addStyle
         };
     }
 }
@@ -92,7 +96,7 @@ const createLoadingIndicator = (message) => {
      * quick jump to important contents
      */
     const elementsToCheck = [
-        { selector: '.locked strong', text: hasPurchased() ? '已购买' : '前往购买' },
+        { selector: '.locked a[href*="action=pay"', text: hasPurchased() ? '已购买' : '前往购买' },
         { selector: '.blockcode', text: '资源链接' },
         { selector: '#ak_rate', text: '评分', isClick: true }
     ];
@@ -107,8 +111,7 @@ const createLoadingIndicator = (message) => {
         return button;
     };
 
-    const style = document.createElement('style');
-    style.textContent = `
+    GM.addStyle(`
     .quick-button-container {
         position: fixed;
         right: 10px;
@@ -145,8 +148,7 @@ const createLoadingIndicator = (message) => {
     .favorite-button {
         background: #FEAE10;
     }
-`;
-    document.head.appendChild(style);
+    `)
 
     function hasPurchased() {
         return document.querySelector('.y a[href*="action=viewpayments"]') !== null;
@@ -193,9 +195,7 @@ const createLoadingIndicator = (message) => {
 
         // 更新附件按钮
         const updateAttachmentButtons = () => {
-            // 更新常规附件按钮
-            const attachmentElements = document.querySelectorAll('span[id^="attach_"]');
-            attachmentElements.forEach(element => {
+            const createAndAppendButton = (element) => {
                 const button = createButton({
                     text: '下载附件',
                     title: element.textContent.trim(),
@@ -203,25 +203,56 @@ const createLoadingIndicator = (message) => {
                     onClick: () => scrollToElement(element)
                 });
                 buttonContainer.appendChild(button);
-            });
+            };
+
+            // 更新常规附件按钮
+            document.querySelectorAll('span[id^="attach_"]').forEach(createAndAppendButton);
 
             // 更新免费附件按钮
-            const freeAttachmentElements = document.querySelectorAll('dl.tattl');
-            freeAttachmentElements.forEach(element => {
-                const tipElement = element.querySelector('.tip');
-                if (tipElement && tipElement.textContent.includes('点击文件名下载附件')) {
-                    const button = createButton({
-                        text: '下载附件',
-                        title: element.textContent.trim(),
-                        ariaLabel: element.textContent.trim(),
-                        onClick: () => scrollToElement(element)
-                    });
-                    buttonContainer.appendChild(button);
+            document.querySelectorAll('dl.tattl .tip').forEach(tipElement => {
+                if (tipElement.textContent.includes('点击文件名下载附件')) {
+                    createAndAppendButton(tipElement.closest('dl.tattl'));
                 }
             });
         };
 
+        // 回复解锁按钮
+        const locked = document.querySelector('.locked a[href*="action=reply"]');
+        if (locked) {
+            const button = createButton({
+                text: '回复解锁',
+                title: locked.textContent.trim(),
+                ariaLabel: locked.textContent.trim(),
+                onClick: () => {
+                    locked.click();
+                }
+            });
+            buttonContainer.appendChild(button);
+        }
+
         updateAttachmentButtons();
+    };
+
+    const observeRateLoadingElement = () => {
+        let loadingElementVisible = false;
+
+        const loadingObserver = new MutationObserver((mutations, observer) => {
+            const loadingElement = document.querySelector('div[id^="post_"] img[src*="loading.gif"]');
+
+            if (loadingElement && !loadingElementVisible) {
+                loadingElementVisible = true;
+            }
+
+            if (!loadingElement && loadingElementVisible) {
+                loadingElementVisible = false;
+                updateButtonStates();
+            }
+        });
+
+        loadingObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
     };
 
     const observeRateForm = () => {
@@ -233,33 +264,11 @@ const createLoadingIndicator = (message) => {
                     const scoreValue = scoreElement.textContent.trim();
                     document.querySelector('#score8').value = scoreValue;
                 }
-
-                // 监听表单关闭事件
-                const closeObserver = new MutationObserver((mutations, closeObs) => {
-                    if (!document.querySelector('#rateform')) {
-                        closeObs.disconnect();
-
-                        // 监听 #postlist 内容更新
-                        const postlistObserver = new MutationObserver((mutations, postObs) => {
-                            // 确保更新已完成
-                            setTimeout(() => {
-                                updateButtonStates(); // 仅更新按钮状态
-                                postObs.disconnect(); // 停止观察
-                            }, 1500);
-                        });
-
-                        const postlist = document.querySelector('#postlist');
-                        if (postlist) {
-                            postlistObserver.observe(postlist, { childList: true, subtree: true });
-                        }
-                    }
-                });
-
-                closeObserver.observe(document.body, { childList: true, subtree: true });
-
                 obs.disconnect(); // 停止观察表单
             }
         });
+
+        observeRateLoadingElement();
 
         rateObserver.observe(document.body, { childList: true, subtree: true });
     };
@@ -428,8 +437,8 @@ const createLoadingIndicator = (message) => {
 
         // 兼容两种分区地址格式（for edge）
         const querySectionLink = (thread, fid) => {
-            const linkSelectors = fid ? 
-                [`a[href*="fid=${fid}"]`, `a[href^="forum-${fid}"]`] : 
+            const linkSelectors = fid ?
+                [`a[href*="fid=${fid}"]`, `a[href^="forum-${fid}"]`] :
                 ['a[href*="fid="]', 'a[href^="forum-"]'];
 
             for (const selector of linkSelectors) {
@@ -602,8 +611,7 @@ const createLoadingIndicator = (message) => {
             }
         });
 
-        const style = document.createElement('style');
-        style.textContent = `
+        GM.addStyle(`
         .filter-container {
             position: fixed;
             left: calc(50vw + 200px);
@@ -696,9 +704,6 @@ const createLoadingIndicator = (message) => {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        `;
-
-        document.head.appendChild(style);
+      `)
     }
-
 })();
