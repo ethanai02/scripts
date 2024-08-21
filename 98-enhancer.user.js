@@ -37,17 +37,22 @@
 // @match        *://*.kofqo.com/*
 // @match        *://*.kofqo.net/*
 // @match        *://*.9zi2n.com/*
+// @match        *://*.pky0s.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
 // @grant        GM.listValues
 // @grant        GM.addStyle
+// @grant        GM.openInTab
+// @grant        GM.registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
 // @grant        GM_addStyle
-// @icon         https://sehuatang.net/favicon.ico
+// @grant        GM_openInTab
+// @grant        GM.registerMenuCommand
+// @icon         data:image/gif;base64,UklGRgABAABXRUJQVlA4WAoAAAAQAAAADwAADwAAQUxQSKYAAAANgJtt27Hn+v3HtitbrY0BnMrJBJnAWCCt2dk2Ktu2zTcrRMQEgMRWa/XZLCH8bqTqGCAqS3F5ZPmClmdXH6CRDn42AFpJdZfwIeFvn5sVUMsF9gHcHgX0jLdfgpMRtCq+KStAVGIZERAgBATy3+cNB7HX1pZ42V/P68vN2gXPeYZ/zOer4bhy1tEmTfWjn58vA6NXZkkm70fD578A1xVT1uoFLX4CVlA4IDQAAABQAQCdASoQABAAB0CWJbAABe9AAP7msGXYtkQ9eTZz0OaTWMpBhwn6oJ35ZoLVEQcVAAAA
 // @downloadURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.user.js
 // @updateURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
 // ==/UserScript==
@@ -68,7 +73,9 @@ function initGM() {
                 return await GM.deleteValue(window.GM, key);
             },
             listValues: GM.listValues,
-            addStyle: GM.addStyle
+            addStyle: GM.addStyle,
+            openInTab: GM.openInTab,
+            registerMenuCommand: GM.registerMenuCommand
         };
     } else {
         return {
@@ -78,170 +85,435 @@ function initGM() {
                 return await GM_deleteValue(key);
             },
             listValues: GM_listValues,
-            addStyle: GM_addStyle
+            addStyle: GM_addStyle,
+            openInTab: GM_openInTab,
+            registerMenuCommand: GM_registerMenuCommand,
         };
     }
 }
 
+const MAIN_CONFIG_KEY = '98_config';
+
+const DEFAULT_MAIN_CONFIG = {
+    initFavorRecords: true,
+}
+
+const LOAD_TIME_LIMIT = 3000;
+
+const SEARCH_CONFIG_KEY = '98_search_pref';
+const DEFAULT_SEARCH_CONFIG = {};
+
+const FAVOR_THREADS_CACHE_CONFIG_KEY = '98_favor_threads';
+const DEFAULT_FAVOR_THREADS_CACHE_CONFIG = { time: 0, data: {} }; // [tid]: [favid]
+
+const RATED_THREADS_CACHE_CONFIG_KEY = '98_rated_threads';
+const DEFAULT_RATED_THREADS_CACHE_CONFIG = { time: 0, data: {} }; // [tid]: boolean
+
+function initConfigAccess(myUserId, configKey, defaultValue) {
+    return {
+        async read() {
+            return readUserConfig(myUserId, configKey, defaultValue);
+        },
+        async write(newValue) {
+            await GM.setValue(configKey + '#' + myUserId, JSON.stringify(newValue));
+        },
+        async update(updater) {
+            return updateUserConfig(myUserId, updater, configKey, defaultValue);
+        }
+    };
+}
+
+async function readUserConfig(myUserId, configKey, defaultValue) {
+    try {
+        let savedData = await GM.getValue(configKey + '#' + myUserId);
+        return Object.assign({}, defaultValue, JSON.parse(savedData));
+    } catch (e) { }
+    return Object.assign({}, defaultValue);
+}
+
+async function updateUserConfig(myUserId, updater, configKey, defaultValue) {
+    let oldConfig = await readUserConfig(myUserId, configKey, defaultValue);
+    let newConfig = await updater(oldConfig);
+    if (newConfig != null) {
+        await GM.setValue(configKey + '#' + myUserId, JSON.stringify(newConfig));
+    }
+    return newConfig;
+}
+
+function readFavorList(doc) {
+    const items = {};
+    doc.querySelectorAll('ul#favorite_ul li[id^="fav_"]').forEach(a => {
+        const source = a.querySelector('input[name="favorite[]"]');
+        const favid = source.value * 1;
+        const tid = source.getAttribute('vid') * 1;
+        items[tid] = favid;
+    });
+    return items;
+}
+
+/**
+ * 初始化收藏数据
+ * @param {*} favorThreadsCacheAccess 
+ * @param {*} fresh 
+ * @param {*} callback 仅在 fresh 为 true 时可用
+ * @returns { [tid]: favid }}
+ */
+async function readFavorRecords(favorThreadsCacheAccess, fresh, callback) {
+    let userId = findMyUserId();
+
+    let isLoading = false;
+    const loadNextPage = async (doc) => {
+        let cached = await favorThreadsCacheAccess.read();
+        const favors = readFavorList(doc);
+        const data = { ...cached.data, ...favors }
+        await favorThreadsCacheAccess.write({ data, time: Date.now() });
+
+        if (isLoading) return;
+        const nextPageLink = doc.querySelector('.pg a.nxt');
+
+        if (!nextPageLink) {
+            await callback();
+            return data;
+        };
+        isLoading = true;
+
+        await fetchGetPage(nextPageLink.href)
+            .then(async doc => {
+                setTimeout(() => loadNextPage(doc), 1000)
+            })
+            .finally(() => isLoading = false)
+
+        return data
+    }
+
+    if (fresh) {
+        await favorThreadsCacheAccess.write(DEFAULT_FAVOR_THREADS_CACHE_CONFIG);
+        const doc = await fetchGetPage(`home.php?mod=space&uid=${userId}&do=favorite&type=all`);
+        const favors = await loadNextPage(doc);
+        return favors;
+    } else {
+        let cached = await favorThreadsCacheAccess.read();
+        return cached.data;
+    }
+}
+
+async function readRatedRecords(ratedThreadsCacheAccess) {
+    let cached = await ratedThreadsCacheAccess.read();
+    return cached.data;
+}
+
 const createLoadingIndicator = (message) => {
     const indicator = document.createElement('div');
-    indicator.className = 'loading-indicator';
+    indicator.className = 'ese-loading-indicator';
     indicator.textContent = message;
     return indicator;
 };
 
+function findMyUserId() {
+    const userIdSource = [
+        ['#um .vwmy > a', /uid=(\d+)/, 'href'], // 论坛内
+        ['head script:not([src]):not([id])', /discuz_uid\ =\ \'(\d+)\'/, 'textContent'] // 搜索页
+    ]
+    for (let [selector, reg, key] of userIdSource) {
+        const userWrap = document.querySelector(selector);
+        if (userWrap != null) {
+            const userMatch = userWrap[key]?.match(reg);
+            if (userMatch != null) return userMatch[1] * 1;
+        }
+    }
+    return -1; // 未登录情况下，后续添加账号迁移功能
+}
+
 (async function () {
     'use strict';
     const GM = initGM();
+
+    const INTRO_POST = document.location.origin + '/forum.php?mod=viewthread&tid=2251912';
+
+    GM.registerMenuCommand('打开功能简介帖', () => GM.openInTab(INTRO_POST, false));
+
+    GM.addStyle(`
+    .ese-quick-button-container {
+        position: fixed;
+        left: calc(50vw + 510px);
+        top: 205px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        font-size: 1.1em;
+        margin-top: 0;
+        padding: 0.2em;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        background: rgba(254, 242, 232, 0.9);
+    }
+    .ese-quick-button {
+        margin: 5px;
+        border: none;
+        cursor: pointer;
+        color: #787878;
+        font-weight: bold;
+        font-family: monospace;
+        margin-right: 0.3em;
+        min-width: 6em;
+        display: inline-block;
+        background: none;
+    }
+    .ese-quick-button:hover { text-decoration: underline; }
+    .ese-favorite-button, .ese-block-button {
+        border: 1px solid;
+        cursor: pointer;
+    }
+    .ese-favorite-button {
+        background: #FEAE10;
+    }
+    .ese-quick-button.ese-active {
+        background-color: #ffffe9;
+        outline: 3px solid lightgray;
+        color: #565656;
+    }
+    .ese-quick-button.ese-active:hover {
+        outline: 3px solid #777;
+    }
+    .ese-quick-button.ese-active:after {
+        content: '✔';
+        position: relative;
+        left: 4px;
+        overflow: hidden;
+        color: goldenrod;
+    }
+
+    /* ========== search page ========== */
+    .ese-filter-container {
+        position: fixed;
+        left: calc(50vw + 200px);
+        top: 105px;
+        display: flex;
+        flex-direction: column;
+        z-index: 9999;
+        width: 140px;
+        padding: 0 2px;
+        max-height: 750px;
+        overflow-y: scroll;
+        overflow-x: hidden;
+        scrollbar-width: none;
+    }
+    .ese-filter-button {
+        color: #333;
+        border: none;
+        padding: 1px 2px;
+        box-shadow: 2px 2px 1px 0 #0009;
+        white-space: pre;
+        font-size: 14px;
+        line-height: 18px;
+        margin: 8px 0;
+        cursor: pointer;
+        outline: 2px solid lightblue;
+        font-weight: bold;
+        background: #EEEE;
+        position: relative;
+        padding-left: 32px;
+    }
+    .ese-filter-button.ese-hidden {
+        color: #CCC;
+        background: #999C;
+        text-decoration: line-through;
+        outline-color: #999;
+    }
+    .ese-filter-button:hover {
+        outline-color: deepskyblue;
+    }
+    .ese-filter-button-count {
+        color: royalblue;
+        padding-right: 10px;
+        position: absolute;
+        left: 4px;
+    }
+    .ese-filter-button.ese-hidden .ese-filter-button-count {
+        color: #CCC;
+    }
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+    .ese-fade-in {
+        opacity: 0;
+        animation: fadeIn 1s forwards;
+    }
+    .ese-loading-indicator {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: rgba(0, 0, 0, 0.8);
+        color: #fff;
+        padding: 12px 18px;
+        border-radius: 5px;
+        font-size: 14px;
+        font-weight: bold;
+        box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .ese-loading-indicator::before {
+        content: '';
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 3px solid #fff;
+        border-radius: 50%;
+        border-top-color: transparent;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    @media only screen and (max-width: 1280px) {
+        .ese-quick-button-container, .ese-filter-container {
+            left: unset;
+            right: 9px;
+            max-height: 550px;
+        }
+    }
+    `)
+
+    const myUserId = findMyUserId();
+    const mainConfigAccess = initConfigAccess(myUserId, MAIN_CONFIG_KEY, DEFAULT_MAIN_CONFIG);
+    const favorThreadsCacheAccess = initConfigAccess(myUserId, FAVOR_THREADS_CACHE_CONFIG_KEY, DEFAULT_FAVOR_THREADS_CACHE_CONFIG);
+    const ratedThreadsCacheAccess = initConfigAccess(myUserId, RATED_THREADS_CACHE_CONFIG_KEY, DEFAULT_RATED_THREADS_CACHE_CONFIG);
+
+    let mainConfig = await mainConfigAccess.read();
+
     /**
      * quick jump to important contents
      */
     const elementsToCheck = [
-        { selector: '.locked a[href*="action=pay"', text: '💰 购买', isClick: true },
-        { selector: '#k_favorite', text: '⭐️ 收藏', isClick: true },
-        { selector: '#ak_rate', text: '👍 评分', isClick: true },
+        { // 一键收藏、 取消收藏
+            selector: '#k_favorite', text: '⭐️ 收藏',
+            init: (btn) => {
+                btn.loading = false;
+                readFavorRecords(favorThreadsCacheAccess)
+                    .then(data => {
+                        const favid = data && Object_hasOwn(data, tid) ? data[tid] : null;
+                        btn.dataset.favid = favid;
+                        if (favid) btn.classList.add('ese-active');
+                    });
+            },
+            onClick: async (element, tid, btn) => {
+                let favid = btn.dataset.favid * 1;
+
+                if (btn.loading) return
+
+                showNativeSpinner();
+                btn.loading = true;
+
+                if (favid) {
+                    let data = await readFavorRecords(favorThreadsCacheAccess);
+                    const postData = new FormData();
+                    postData.set('formhash', getVerifyHash());
+                    postData.set('handlekey', `a_delete_${favid}`);
+                    postData.set('deletesubmit', true);
+                    await fetch(`home.php?mod=spacecp&ac=favorite&op=delete&favid=${favid}&type=all&inajax=1`, { method: 'POST', body: postData })
+                        .then(async () => {
+                            btn.dataset.favid = 0;
+                            btn.classList.remove('ese-active');
+                            delete data[tid];
+                            await favorThreadsCacheAccess.write({ data, time: Date.now() });
+                            showNativeInfoPopup('删除收藏成功')
+                        })
+                        .catch(ex => {
+                            showNativeWarningPopup('操作出错');
+                        })
+                        .finally(() => {
+                            closeNativeSpinner()
+                            btn.loading = false;
+                        });
+                } else {
+                    fetchGetPage(`home.php?mod=spacecp&ac=favorite&type=thread&id=${tid}&formhash=${getVerifyHash()}&infloat=yes&handlekey=k_favorite&inajax=1&ajaxtarget=fwin_content_k_favorite`, "text/xml")
+                        .then(async doc => {
+                            const scriptContent = doc.querySelector('root').textContent;
+                            const FAV_SUCCESS_TEXT = '信息收藏成功'
+                            const FAV_ALREADY_EXIST_TEXT = '抱歉，您已收藏，请勿重复收藏'
+                            if (scriptContent.includes(FAV_ALREADY_EXIST_TEXT)) {
+                                await mainConfigAccess.update(async function (updateUserConfig) {
+                                    updateUserConfig.initFavorRecords = true;
+                                    return updateUserConfig
+                                })
+                                throw Error("收藏信息过期，请刷新页面更新数据")
+                            }
+                            if (scriptContent.includes(FAV_SUCCESS_TEXT)) {
+                                const match = scriptContent.match(/'id':'(\d+)'[^]*'favid':'(\d+)'/);
+                                if (match) {
+                                    showNativeInfoPopup(FAV_SUCCESS_TEXT)
+                                    const tid = match[1] * 1;
+                                    const favid = match[2] * 1;
+                                    await favorThreadsCacheAccess.update(cache => {
+                                        if (cache && cache.data) {
+                                            cache.data[tid] = favid;
+                                            return cache;
+                                        }
+                                    });
+
+                                    btn.dataset.favid = favid;
+                                    btn.classList.add('ese-active');
+                                }
+                            }
+                        })
+                        .catch(msg => {
+                            showNativeWarningPopup(msg);
+                        })
+                        .finally(() => {
+                            closeNativeSpinner()
+                            btn.loading = false;
+                        });
+                }
+            }
+        },
+        { // 快捷评分
+            selector: '#ak_rate', text: '👍 评分',
+            init: (btn) => {
+                readRatedRecords(ratedThreadsCacheAccess)
+                    .then(data => {
+                        const rated = data && Object_hasOwn(data, tid) ? data[tid] : null;
+                        btn.dataset.rated = rated;
+                        if (rated) btn.classList.add('ese-active');
+                    });
+
+            },
+            onClick: (element, tid) => {
+                element.click();
+                observeRateForm();
+                observeRateLoadingElement(async () => {
+                    await ratedThreadsCacheAccess.update(cache => {
+                        if (cache && cache.data) {
+                            cache.data[tid] = true;
+                            return cache;
+                        }
+                    });
+                });
+            }
+        },
+        { selector: '.locked a[href*="action=pay"', text: '💰 购买', onClick: (element) => element.click() },
+        { selector: '.locked a[href*="action=reply"]', text: '🔒 回复', onClick: (element) => element.click() }, // 回复解锁
         { selector: '.blockcode', text: '🧲 链接' },
     ];
 
     const createButton = ({ text, onClick, title, ariaLabel }) => {
         const button = document.createElement('button');
         button.innerText = text;
-        button.className = 'quick-button';
+        button.className = 'ese-quick-button';
         button.title = title;
         button.setAttribute('aria-label', ariaLabel);
-        button.addEventListener('click', onClick);
+        if (onClick) button.addEventListener('click', onClick);
         return button;
     };
-
-    GM.addStyle(`
-.quick-button-container {
-    position: fixed;
-    left: calc(50vw + 510px);
-    top: 205px;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    font-size: 1.1em;
-    margin-top: 0;
-    padding: 0.2em 0.5em;
-    scrollbar-gutter: stable;
-    scrollbar-width: thin;
-    background: #FEF2E8;
-}
-.quick-button {
-    margin: 5px;
-    border: none;
-    cursor: pointer;
-    color: #787878;
-    font-weight: bold;
-    font-family: monospace;
-    margin-right: 0.3em;
-    min-width: 2.5em;
-    display: inline-block;
-    background: none;
-}
-.quick-button:hover { text-decoration: underline; }
-.favorite-button, .block-button {
-    border: 1px solid;
-    cursor: pointer;
-}
-.favorite-button {
-    background: #FEAE10;
-}
-
-/* ========== search page ========== */
-.filter-container {
-    position: fixed;
-    left: calc(50vw + 200px);
-    top: 105px;
-    display: flex;
-    flex-direction: column;
-    z-index: 9999;
-    width: 140px;
-}
-.filter-button {
-    color: #333;
-    border: none;
-    padding: 1px 2px;
-    box-shadow: 2px 2px 1px 0 #0009;
-    white-space: pre;
-    font-size: 14px;
-    line-height: 18px;
-    margin: 8px 0;
-    cursor: pointer;
-    outline: 2px solid lightblue;
-    font-weight: bold;
-    background: #EEEE;
-    position: relative;
-    padding-left: 32px;
-}
-.filter-button.hidden {
-    color: #CCC;
-    background: #999C;
-    text-decoration: line-through;
-    outline-color: #999;
-}
-.filter-button:hover {
-    outline-color: deepskyblue;
-}
-.filter-button-count {
-    color: royalblue;
-    padding-right: 10px;
-    position: absolute;
-    left: 4px;
-}
-.hidden .filter-button-count {
-    color: #CCC;
-}
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-.fade-in {
-    opacity: 0;
-    animation: fadeIn 1s forwards;
-}
-.loading-indicator {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background-color: rgba(0, 0, 0, 0.8);
-    color: #fff;
-    padding: 12px 18px;
-    border-radius: 5px;
-    font-size: 14px;
-    font-weight: bold;
-    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.loading-indicator::before {
-    content: '';
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 3px solid #fff;
-    border-radius: 50%;
-    border-top-color: transparent;
-    animation: spin 1s linear infinite;
-}
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-@media only screen and (max-width: 1280px) {
-    .quick-button-container, .filter-container {
-        left: unset;
-        right: 9px;
-    }
-    }`)
 
     const scrollToElement = (element) => {
         const observer = new MutationObserver((mutations, obs) => {
@@ -257,29 +529,32 @@ const createLoadingIndicator = (message) => {
     };
 
     const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'quick-button-container';
+    buttonContainer.className = 'ese-quick-button-container';
 
     const updateButtonStates = () => {
         buttonContainer.innerHTML = ''; // 清空现有按钮，防止重复添加
 
-        elementsToCheck.forEach(({ selector, text, isClick }) => {
+        const url = new URL(window.location);
+        const tid = url.searchParams.get('tid')
+
+        elementsToCheck.forEach(({ selector, text, onClick, init }) => {
             const element = document.querySelector(selector);
             if (element) {
-                const button = createButton({
-                    text,
-                    title: element.textContent.trim(),
-                    ariaLabel: element.textContent.trim(),
-                    onClick: () => {
-                        if (isClick) {
-                            element.click();
-                            observeRateForm();
-                            observeRateLoadingElement();
-                        } else {
-                            scrollToElement(element);
-                        }
+                const quickBtn = createButton({ text, title: element.textContent.trim(), ariaLabel: element.textContent.trim() });
+
+                quickBtn.addEventListener('click', () => {
+                    if (typeof onClick === 'function') {
+                        onClick(element, tid, quickBtn)
+                    } else {
+                        scrollToElement(element);
                     }
-                });
-                buttonContainer.appendChild(button);
+                })
+
+                if (typeof init === 'function') {
+                    init(quickBtn)
+                }
+
+                buttonContainer.appendChild(quickBtn);
             }
         });
 
@@ -306,27 +581,23 @@ const createLoadingIndicator = (message) => {
             });
         };
 
-        // 回复解锁按钮
-        const locked = document.querySelector('.locked a[href*="action=reply"]');
-        if (locked) {
-            const button = createButton({
-                text: '🔒 解锁',
-                title: locked.textContent.trim(),
-                ariaLabel: locked.textContent.trim(),
-                onClick: () => {
-                    locked.click();
-                }
-            });
-            buttonContainer.appendChild(button);
-        }
-
         updateAttachmentButtons();
     };
 
-    const observeRateLoadingElement = () => {
+    if (mainConfig.initFavorRecords) {
+        readFavorRecords(favorThreadsCacheAccess, true, async () => {
+            await mainConfigAccess.update(async function (updateUserConfig) {
+                updateUserConfig.initFavorRecords = false;
+                return updateUserConfig
+            })
+            updateButtonStates()
+        })
+    }
+
+    const observeRateLoadingElement = async (callback) => {
         let loadingElementVisible = false;
 
-        const loadingObserver = new MutationObserver((mutations, observer) => {
+        const loadingObserver = new MutationObserver(async (mutations, observer) => {
             const loadingElement = document.querySelector('div[id^="post_"] img[src*="loading.gif"]');
 
             if (loadingElement && !loadingElementVisible) {
@@ -335,6 +606,7 @@ const createLoadingIndicator = (message) => {
 
             if (!loadingElement && loadingElementVisible) {
                 loadingElementVisible = false;
+                if (typeof callback === 'function') await callback()
                 updateButtonStates();
                 loadingObserver.disconnect();
             }
@@ -370,8 +642,8 @@ const createLoadingIndicator = (message) => {
     }
 
     /**
-   * Highling favorite users and today's new posts
-   */
+     * Highlighting favorite users and today's new posts
+     */
     const currentUrl = window.location.href;
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
     const isPostListPage = /fid=\d+/.test(currentUrl) || /forum-(\d+)-\d+\.html/.test(currentUrl);
@@ -397,7 +669,7 @@ const createLoadingIndicator = (message) => {
 
             const favoriteButton = document.createElement('button');
             favoriteButton.innerText = isFavorited ? '取消收藏' : '收藏用户';
-            favoriteButton.className = 'quick-button favorite-button';
+            favoriteButton.className = 'ese-quick-button ese-favorite-button';
             favoriteButton.style.marginLeft = '10px';
 
             favoriteButton.addEventListener('click', () => {
@@ -425,7 +697,7 @@ const createLoadingIndicator = (message) => {
 
             const blokedButton = document.createElement('button');
             blokedButton.innerText = isBlocked ? '取消屏蔽' : '屏蔽用户';
-            blokedButton.className = 'quick-button block-button';
+            blokedButton.className = 'ese-quick-button ese-block-button';
             blokedButton.style.marginLeft = '10px';
 
             blokedButton.addEventListener('click', () => {
@@ -527,17 +799,15 @@ const createLoadingIndicator = (message) => {
         // 兼容两种分区地址格式（for edge）
         const querySectionLink = (thread, fid) => {
             const linkSelectors = fid ?
-                [`a[href*="fid=${fid}"]`, `a[href^="forum-${fid}"]`] :
-                ['a[href*="fid="]', 'a[href^="forum-"]'];
+                `a[href*="fid=${fid}"], a[href^="forum-${fid}"]` :
+                'a[href*="fid="], a[href^="forum-"]';
 
-            for (const selector of linkSelectors) {
-                const link = thread.querySelector(selector);
-                if (link) {
-                    const url = new URL(link.href);
-                    const fidValue = fid || url.searchParams.get('fid') || url.pathname.match(/forum-(\d+)-\d+\.html/)?.[1];
-                    const sectionName = link.textContent.trim();
-                    if (fidValue) return { sectionLink: link, fid: fidValue, sectionName };
-                }
+            const link = thread.querySelector(linkSelectors);
+            if (link) {
+                const url = new URL(link.href);
+                const fidValue = fid || url.searchParams.get('fid') || url.pathname.match(/forum-(\d+)-\d+\.html/)?.[1];
+                const sectionName = link.textContent.trim();
+                if (fidValue) return { sectionLink: link, fid: fidValue, sectionName };
             }
             return null;
         };
@@ -571,13 +841,13 @@ const createLoadingIndicator = (message) => {
         // 新建 button、更新数值
         const updateFilterButtons = () => {
             sectionMap.forEach((section, fid) => {
-                const existingButton = document.querySelector(`.filter-button[data-fid="${fid}"]`);
+                const existingButton = document.querySelector(`.ese-filter-button[data-fid="${fid}"]`);
 
                 if (existingButton) {
-                    const countElement = existingButton.querySelector('.filter-button-count');
+                    const countElement = existingButton.querySelector('.ese-filter-button-count');
                     const countNum = section.elements.length;
                     countElement.textContent = countNum <= 99 ? countNum : '99+';
-                    existingButton.classList.toggle('hidden', !!hiddenSections[fid]);
+                    existingButton.classList.toggle('ese-hidden', !!hiddenSections[fid]);
                 } else {
                     addFilterSectionButton(section, fid);
                 }
@@ -586,13 +856,13 @@ const createLoadingIndicator = (message) => {
 
         const addFilterSectionButton = (section, fid) => {
             const button = document.createElement('a');
-            button.className = 'filter-button';
+            button.className = 'ese-filter-button';
             button.textContent = section.name;
             button.dataset.fid = fid;
-            button.classList.toggle('hidden', !!hiddenSections[fid]);
+            button.classList.toggle('ese-hidden', !!hiddenSections[fid]);
 
             const countElement = document.createElement('span');
-            countElement.className = 'filter-button-count';
+            countElement.className = 'ese-filter-button-count';
             countElement.textContent = section.elements.length;
             button.insertBefore(countElement, button.firstChild);
 
@@ -601,7 +871,7 @@ const createLoadingIndicator = (message) => {
                 section.elements.forEach(thread => {
                     thread.style.display = hiddenSections[fid] ? 'none' : '';
                 });
-                button.classList.toggle('hidden', !!hiddenSections[fid]);
+                button.classList.toggle('ese-hidden', !!hiddenSections[fid]);
                 updateHiddenSections();
             });
 
@@ -609,7 +879,7 @@ const createLoadingIndicator = (message) => {
         };
 
         const filterContainer = document.createElement('div');
-        filterContainer.className = 'filter-container';
+        filterContainer.className = 'ese-filter-container';
         document.body.appendChild(filterContainer);
 
         updateFilterButtons();
@@ -627,27 +897,22 @@ const createLoadingIndicator = (message) => {
             const loadingIndicator = createLoadingIndicator('加载中...');
             document.body.appendChild(loadingIndicator);
 
-            const loadTime = 3000;
             const elapsedTime = Date.now() - lastLoadedTime;
-            const waitTime = Math.max(0, loadTime - elapsedTime);
+            const waitTime = Math.max(0, LOAD_TIME_LIMIT - elapsedTime);
 
             setTimeout(() => {
-                fetch(nextPageLink.href)
-                    .then(response => response.text())
-                    .then(html => {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(html, 'text/html');
-
+                fetchGetPage(nextPageLink.href)
+                    .then(doc => {
                         const errorMessage = doc.querySelector('#messagetext.alert_error');
                         if (errorMessage && errorMessage.textContent.includes('刷新过于频繁')) {
                             showRetryIndicator();
-                            setTimeout(loadNextPage, 3000);
+                            setTimeout(loadNextPage, LOAD_TIME_LIMIT);
                             return;
                         }
 
                         const newThreads = doc.querySelectorAll('#threadlist .pbw');
                         newThreads.forEach(thread => {
-                            thread.classList.add('fade-in'); // 添加渐入动效类
+                            thread.classList.add('ese-fade-in'); // 添加渐入动效类
                             document.querySelector('#threadlist ul').appendChild(thread);
                             processThread(thread);
                         });
@@ -676,29 +941,132 @@ const createLoadingIndicator = (message) => {
             setTimeout(() => {
                 retryIndicator.remove();
                 loadNextPage();
-            }, 3000);
+            }, LOAD_TIME_LIMIT);
         };
 
-        const loadNextPageIfNeeded = () => {
-            const scrollPosition = window.innerHeight + window.scrollY;
-            const threshold = document.documentElement.scrollHeight - window.innerHeight / 2;
-
-            if (scrollPosition >= threshold && !isLoading) {
-                loadNextPage();
-            }
+        const loadNextPageIfNeeded = (entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !isLoading) loadNextPage();
+            });
         };
 
-        window.addEventListener('wheel', (event) => {
-            if (event.deltaY > 0) {
-                loadNextPageIfNeeded();
-            }
+        // 使用一个 sentinel 元素
+        const sentinel = document.createElement('div');
+        sentinel.style.height = '1px';
+        document.body.appendChild(sentinel);
+
+        const loadNextPageObserver = new IntersectionObserver(loadNextPageIfNeeded, {
+            root: null,
+            rootMargin: '50% 0px',
+            threshold: 0
         });
 
-        window.addEventListener('keydown', (event) => {
-            if (event.code === 'Space') {
-                loadNextPageIfNeeded();
-            }
-        });
-
+        loadNextPageObserver.observe(sentinel);
     }
+
+    /** section links sort default by datetime */
+    const setCustomSectionLink = () => {
+        document.body.addEventListener('click', event => {
+            const link = event.target.closest('a[href*="forum.php?mod=forumdisplay"], a[href*="forum-"]');
+            if (!link) return;
+
+            event.preventDefault();
+            let url = new URL(link.href, window.location.origin);
+
+            if (url.pathname.includes('forum.php')) {
+                if (!url.searchParams.get("orderby")) url.searchParams.set('orderby', 'dateline');
+            } else if (url.pathname.match(/forum-\d+-\d+\.html/)) {
+                const fid = url.pathname.split('-')[1];
+                url = new URL(`/forum.php?mod=forumdisplay&fid=${fid}&orderby=dateline`, window.location.origin);
+            }
+
+            window.location.href = url;
+        });
+        document.querySelectorAll('a[rel*="forum.php?mod=forumdisplay"]').forEach(nxt => {
+            // 下一页
+            let url = new URL(nxt.rel, window.location.origin);
+            if (!url.searchParams.get("orderby")) url.searchParams.set('orderby', 'dateline');
+            nxt.rel = url
+        })
+    }
+    setCustomSectionLink()
 })();
+
+//============= utils =============//
+
+let verifyhashCache = null;
+function getVerifyHash() {
+    if (unsafeWindow.verifyhash) {
+        return unsafeWindow.verifyhash;
+    }
+    if (verifyhashCache) {
+        return verifyhashCache;
+    }
+    const hiddenField = document.querySelector('input[type="hidden"][name="formhash"][value]');
+    if (hiddenField) {
+        verifyhashCache = hiddenField.value;
+        return hiddenField.value;
+    }
+    for (let scriptElement of document.querySelectorAll('script')) {
+        const match = scriptElement.textContent.match(/hash=([A-Za-z0-9]{8})/);
+        if (match) {
+            verifyhashCache = match[1];
+            return match[1];
+        }
+    }
+    alert('无法取得操作验证码 (运作环境错误，请用篡改猴及谷歌火狐等主流浏览器)');
+}
+
+// polyfill replacement
+function Object_hasOwn(obj, prop) {
+    return Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+function showNativeSpinner(anchor) {
+    try {
+        unsafeWindow.showloading();
+    } catch (ignore) { }
+}
+function closeNativeSpinner() {
+    try {
+        unsafeWindow.showloading('none');
+    } catch (ignore) { }
+}
+function showNativeWarningPopup(msg) {
+    try {
+        unsafeWindow.errorhandle_k_favorite(msg, {})
+    } catch (ignore) {
+        alert(msg);
+    }
+}
+function showNativeInfoPopup(msg) {
+    showDialog(msg, 'right', null, null, 0, null, null, null, null, 2, null)
+}
+
+async function fetchGetPage(url, docType, autoRetry) {
+    const resp = await fetch(url, {
+        method: 'GET',
+        mode: 'same-origin',
+        credentials: 'same-origin',
+        cache: 'no-cache'
+    });
+
+    if (!resp.ok) {
+        throw new Error('网络或登入错误');
+    }
+    const content = await resp.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content, docType || 'text/html');
+    if (autoRetry) {
+        if (findErrorMessage(doc) === '刷新过于频繁，请3秒后再试。') {
+            await sleep(LOAD_TIME_LIMIT);
+            return await fetchGetPage(url, docType, false);
+        }
+    }
+    return doc;
+}
+
+function findErrorMessage(doc) {
+    let err = doc.querySelector('#messagetext > p');
+    return err ? err.textContent.trim() || '不明错误' : null;
+}
