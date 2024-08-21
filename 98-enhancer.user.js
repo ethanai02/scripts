@@ -112,43 +112,135 @@ const createLoadingIndicator = (message) => {
     };
 
     GM.addStyle(`
-    .quick-button-container {
-        position: fixed;
-        right: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        font-size: 1.1em;
-        margin-top: 0;
-        padding: 0.2em 0.5em;
-        scrollbar-gutter: stable;
-        scrollbar-width: thin;
-        background: #FEF2E8;
-    }
+.quick-button-container {
+    position: fixed;
+    left: calc(50vw + 510px);
+    top: 205px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    font-size: 1.1em;
+    margin-top: 0;
+    padding: 0.2em 0.5em;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    background: #FEF2E8;
+    width: 80px;
+}
+.quick-button {
+    margin: 5px;
+    border: none;
+    cursor: pointer;
+    color: #787878;
+    font-weight: bold;
+    font-family: monospace;
+    margin-right: 0.3em;
+    min-width: 2.5em;
+    display: inline-block;
+    background: none;
+}
+.quick-button:hover { text-decoration: underline; }
+.favorite-button, .block-button {
+    border: 1px solid;
+    cursor: pointer;
+}
+.favorite-button {
+    background: #FEAE10;
+}
 
-    .quick-button {
-        margin: 5px;
-        border: none;
-        cursor: pointer;
-        color: #787878;
-        font-weight: bold;
-        font-family: monospace;
-        margin-right: 0.3em;
-        min-width: 2.5em;
-        display: inline-block;
-        background: none;
+/* ========== search page ========== */
+.filter-container {
+    position: fixed;
+    left: calc(50vw + 200px);
+    top: 105px;
+    display: flex;
+    flex-direction: column;
+    z-index: 9999;
+    width: 140px;
+}
+.filter-button {
+    color: #333;
+    border: none;
+    padding: 1px 2px;
+    box-shadow: 2px 2px 1px 0 #0009;
+    white-space: pre;
+    font-size: 14px;
+    line-height: 18px;
+    margin: 8px 0;
+    cursor: pointer;
+    outline: 2px solid lightblue;
+    font-weight: bold;
+    background: #EEEE;
+    position: relative;
+    padding-left: 32px;
+}
+.filter-button.hidden {
+    color: #CCC;
+    background: #999C;
+    text-decoration: line-through;
+    outline-color: #999;
+}
+.filter-button:hover {
+    outline-color: deepskyblue;
+}
+.filter-button-count {
+    color: royalblue;
+    padding-right: 10px;
+    position: absolute;
+    left: 4px;
+}
+.hidden .filter-button-count {
+    color: #CCC;
+}
+@keyframes fadeIn {
+    from {
+        opacity: 0;
     }
-    .quick-button:hover { text-decoration: underline; }
-    .favorite-button, .block-button {
-        border: 1px solid;
-        cursor: pointer;
+    to {
+        opacity: 1;
     }
-    .favorite-button {
-        background: #FEAE10;
+}
+.fade-in {
+    opacity: 0;
+    animation: fadeIn 1s forwards;
+}
+.loading-indicator {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 12px 18px;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: bold;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.loading-indicator::before {
+    content: '';
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 3px solid #fff;
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@media only screen and (max-width: 1280px) {
+    .quick-button-container, .filter-container {
+        left: unset;
+        right: 9px;
     }
-    `)
+}`)
 
     function hasPurchased() {
         return document.querySelector('.y a[href*="action=viewpayments"]') !== null;
@@ -611,99 +703,5 @@ const createLoadingIndicator = (message) => {
             }
         });
 
-        GM.addStyle(`
-        .filter-container {
-            position: fixed;
-            left: calc(50vw + 200px);
-            top: 105px;
-            display: flex;
-            flex-direction: column;
-            z-index: 9999;
-            width: 140px;
-        }
-
-        .filter-button {
-            color: #333;
-            border: none;
-            padding: 1px 2px;
-            box-shadow: 2px 2px 1px 0 #0009;
-            white-space: pre;
-            font-size: 14px;
-            line-height: 18px;
-            margin: 8px 0;
-            cursor: pointer;
-            outline: 2px solid lightblue;
-            font-weight: bold;
-            background: #EEEE;
-            position: relative;
-            padding-left: 32px;
-        }
-
-        .filter-button.hidden {
-            color: #CCC;
-            background: #999C;
-            text-decoration: line-through;
-            outline-color: #999;
-        }
-
-        .filter-button:hover {
-            outline-color: deepskyblue;
-        }
-        .filter-button-count {
-            color: royalblue;
-            padding-right: 10px;
-            position: absolute;
-            left: 4px;
-        }
-
-        .hidden .filter-button-count {
-            color: #CCC;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
-            }
-        }
-
-        .fade-in {
-            opacity: 0;
-            animation: fadeIn 1s forwards;
-        }
-
-        .loading-indicator {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background-color: rgba(0, 0, 0, 0.8);
-            color: #fff;
-            padding: 12px 18px;
-            border-radius: 5px;
-            font-size: 14px;
-            font-weight: bold;
-            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .loading-indicator::before {
-            content: '';
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 3px solid #fff;
-            border-radius: 50%;
-            border-top-color: transparent;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-      `)
     }
 })();
