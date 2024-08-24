@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.12
+// @version      0.0.13
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -36,6 +36,7 @@
 // @match        *://*.mmpbg.co/*
 // @match        *://*.kofqo.com/*
 // @match        *://*.kofqo.net/*
+// @match        *://*.9zi2n.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
@@ -96,9 +97,10 @@ const createLoadingIndicator = (message) => {
      * quick jump to important contents
      */
     const elementsToCheck = [
-        { selector: '.locked a[href*="action=pay"', text: hasPurchased() ? '已购买' : '前往购买' },
-        { selector: '.blockcode', text: '资源链接' },
-        { selector: '#ak_rate', text: '评分', isClick: true }
+        { selector: '.locked a[href*="action=pay"', text: '💰 购买', isClick: true },
+        { selector: '#k_favorite', text: '⭐️ 收藏', isClick: true },
+        { selector: '#ak_rate', text: '👍 评分', isClick: true },
+        { selector: '.blockcode', text: '🧲 链接' },
     ];
 
     const createButton = ({ text, onClick, title, ariaLabel }) => {
@@ -125,7 +127,6 @@ const createLoadingIndicator = (message) => {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     background: #FEF2E8;
-    width: 80px;
 }
 .quick-button {
     margin: 5px;
@@ -240,11 +241,7 @@ const createLoadingIndicator = (message) => {
         left: unset;
         right: 9px;
     }
-}`)
-
-    function hasPurchased() {
-        return document.querySelector('.y a[href*="action=viewpayments"]') !== null;
-    }
+    }`)
 
     const scrollToElement = (element) => {
         const observer = new MutationObserver((mutations, obs) => {
@@ -275,7 +272,8 @@ const createLoadingIndicator = (message) => {
                     onClick: () => {
                         if (isClick) {
                             element.click();
-                            observeRateForm(); // 观察评分表单
+                            observeRateForm();
+                            observeRateLoadingElement();
                         } else {
                             scrollToElement(element);
                         }
@@ -289,7 +287,7 @@ const createLoadingIndicator = (message) => {
         const updateAttachmentButtons = () => {
             const createAndAppendButton = (element) => {
                 const button = createButton({
-                    text: '下载附件',
+                    text: '📎 附件',
                     title: element.textContent.trim(),
                     ariaLabel: element.textContent.trim(),
                     onClick: () => scrollToElement(element)
@@ -312,7 +310,7 @@ const createLoadingIndicator = (message) => {
         const locked = document.querySelector('.locked a[href*="action=reply"]');
         if (locked) {
             const button = createButton({
-                text: '回复解锁',
+                text: '🔒 解锁',
                 title: locked.textContent.trim(),
                 ariaLabel: locked.textContent.trim(),
                 onClick: () => {
@@ -338,6 +336,7 @@ const createLoadingIndicator = (message) => {
             if (!loadingElement && loadingElementVisible) {
                 loadingElementVisible = false;
                 updateButtonStates();
+                loadingObserver.disconnect();
             }
         });
 
@@ -359,8 +358,6 @@ const createLoadingIndicator = (message) => {
                 obs.disconnect(); // 停止观察表单
             }
         });
-
-        observeRateLoadingElement();
 
         rateObserver.observe(document.body, { childList: true, subtree: true });
     };
