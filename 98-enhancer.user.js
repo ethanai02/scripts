@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.0.13
+// @version      0.1.0
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -69,9 +69,7 @@ function initGM() {
         return {
             getValue: GM.getValue,
             setValue: GM.setValue,
-            async deleteValue(key) {
-                return await GM.deleteValue(window.GM, key);
-            },
+            deleteValue: GM.deleteValue,
             listValues: GM.listValues,
             addStyle: GM.addStyle,
             openInTab: GM.openInTab,
@@ -81,9 +79,7 @@ function initGM() {
         return {
             getValue: GM_getValue,
             setValue: GM_setValue,
-            async deleteValue(key) {
-                return await GM_deleteValue(key);
-            },
+            deleteValue: GM_deleteValue,
             listValues: GM_listValues,
             addStyle: GM_addStyle,
             openInTab: GM_openInTab,
@@ -92,15 +88,16 @@ function initGM() {
     }
 }
 
-const MAIN_CONFIG_KEY = '98_config';
+const MAIN_CONFIG_KEY = '98_main_config';
 
 const DEFAULT_MAIN_CONFIG = {
     initFavorRecords: true,
+    migrateFrom0d0d13: true,
 }
 
 const LOAD_TIME_LIMIT = 3000;
 
-const SEARCH_CONFIG_KEY = '98_search_pref';
+const SEARCH_CONFIG_KEY = '98_search_config';
 const DEFAULT_SEARCH_CONFIG = {};
 
 const FAVOR_THREADS_CACHE_CONFIG_KEY = '98_favor_threads';
@@ -109,21 +106,27 @@ const DEFAULT_FAVOR_THREADS_CACHE_CONFIG = { time: 0, data: {} }; // [tid]: [fav
 const RATED_THREADS_CACHE_CONFIG_KEY = '98_rated_threads';
 const DEFAULT_RATED_THREADS_CACHE_CONFIG = { time: 0, data: {} }; // [tid]: boolean
 
+const USERS_CONFIG_CACHE_KEY = '98_users_config';
+const DEFAULT_USERS_CONFIG_CACHE = {}; // { [uid]: { username: string, subscribed?: boolean, favored?: boolean, blocked?: boolean } }
+
+const SEARCH_HIDDEN_SECTIONS = '98_search_hidden_sections';
+const DEFAULT_SEARCH_HIDDEN_SECTIONS_CONFIG = {}; // { [sid]: boolean }
+
 function initConfigAccess(myUserId, configKey, defaultValue) {
     return {
         async read() {
-            return readUserConfig(myUserId, configKey, defaultValue);
+            return readMainConfig(myUserId, configKey, defaultValue);
         },
         async write(newValue) {
             await GM.setValue(configKey + '#' + myUserId, JSON.stringify(newValue));
         },
         async update(updater) {
-            return updateUserConfig(myUserId, updater, configKey, defaultValue);
+            return updateMainConfig(myUserId, updater, configKey, defaultValue);
         }
     };
 }
 
-async function readUserConfig(myUserId, configKey, defaultValue) {
+async function readMainConfig(myUserId, configKey, defaultValue) {
     try {
         let savedData = await GM.getValue(configKey + '#' + myUserId);
         return Object.assign({}, defaultValue, JSON.parse(savedData));
@@ -131,8 +134,8 @@ async function readUserConfig(myUserId, configKey, defaultValue) {
     return Object.assign({}, defaultValue);
 }
 
-async function updateUserConfig(myUserId, updater, configKey, defaultValue) {
-    let oldConfig = await readUserConfig(myUserId, configKey, defaultValue);
+async function updateMainConfig(myUserId, updater, configKey, defaultValue) {
+    let oldConfig = await readMainConfig(myUserId, configKey, defaultValue);
     let newConfig = await updater(oldConfig);
     if (newConfig != null) {
         await GM.setValue(configKey + '#' + myUserId, JSON.stringify(newConfig));
@@ -140,7 +143,7 @@ async function updateUserConfig(myUserId, updater, configKey, defaultValue) {
     return newConfig;
 }
 
-function readFavorList(doc) {
+function readFavorThreadsList(doc) {
     const items = {};
     doc.querySelectorAll('ul#favorite_ul li[id^="fav_"]').forEach(a => {
         const source = a.querySelector('input[name="favorite[]"]');
@@ -164,7 +167,7 @@ async function readFavorRecords(favorThreadsCacheAccess, fresh, callback) {
     let isLoading = false;
     const loadNextPage = async (doc) => {
         let cached = await favorThreadsCacheAccess.read();
-        const favors = readFavorList(doc);
+        const favors = readFavorThreadsList(doc);
         const data = { ...cached.data, ...favors }
         await favorThreadsCacheAccess.write({ data, time: Date.now() });
 
@@ -229,8 +232,10 @@ function findMyUserId() {
     const GM = initGM();
 
     const INTRO_POST = document.location.origin + '/forum.php?mod=viewthread&tid=2251912';
+    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=26298171';
 
     GM.registerMenuCommand('打开功能简介帖', () => GM.openInTab(INTRO_POST, false));
+    GM.registerMenuCommand('查看更新说明', () => GM.openInTab(UPDATE_NOTE, false));
 
     GM.addStyle(`
     .ese-quick-button-container {
@@ -388,8 +393,51 @@ function findMyUserId() {
     const mainConfigAccess = initConfigAccess(myUserId, MAIN_CONFIG_KEY, DEFAULT_MAIN_CONFIG);
     const favorThreadsCacheAccess = initConfigAccess(myUserId, FAVOR_THREADS_CACHE_CONFIG_KEY, DEFAULT_FAVOR_THREADS_CACHE_CONFIG);
     const ratedThreadsCacheAccess = initConfigAccess(myUserId, RATED_THREADS_CACHE_CONFIG_KEY, DEFAULT_RATED_THREADS_CACHE_CONFIG);
+    const usersConfigCacheAccess = initConfigAccess(myUserId, USERS_CONFIG_CACHE_KEY, DEFAULT_USERS_CONFIG_CACHE);
+    const searchHiddenSectionsAccess = initConfigAccess(myUserId, SEARCH_HIDDEN_SECTIONS, DEFAULT_SEARCH_HIDDEN_SECTIONS_CONFIG);
 
     let mainConfig = await mainConfigAccess.read();
+
+    if (mainConfig.migrateFrom0d0d13) {
+        // 迁移 0.0.13 数据。将在 2025年3月移除。
+        const favoriteUsers = await GM.getValue('favoriteUsers', {});
+        const blockedUsers = await GM.getValue('blockedUsers', {});
+        const hiddenSections = await GM.getValue('hiddenSections', {});
+
+        const userConfig = {};
+        Object.keys(blockedUsers).forEach(item => userConfig[item] = { username: item, blocked: true })
+        Object.keys(favoriteUsers).forEach(item => userConfig[item] = { username: item, favored: true })
+        await usersConfigCacheAccess.update(data => ({ ...data, ...userConfig }))
+
+        await searchHiddenSectionsAccess.update(data => ({ ...data, ...hiddenSections }))
+
+        await GM.deleteValue('favoriteUsers');
+        await GM.deleteValue('blockedUsers');
+        await GM.deleteValue('hiddenSections');
+
+        await mainConfigAccess.update(async function (mainCfg) {
+            mainCfg.migrateFrom0d0d13 = false;
+            return mainCfg
+        })
+    }
+
+    const getUserConfig = async (userId, username, store) => {
+        const userConfigStore = typeof store === 'object' ? store : await usersConfigCacheAccess.read();
+        let userConfig = userConfigStore[userId];
+        // 迁移 0.0.13 数据。将在 2025年3月移除。
+        if (typeof username === 'string') {
+            const legacyUserConfig = userConfigStore[username];
+            if (!userConfig && legacyUserConfig) {
+                await usersConfigCacheAccess.update(async data => {
+                    data[userId] = data[username]
+                    delete data[username];
+                    return data;
+                })
+                userConfig = legacyUserConfig;
+            }
+        }
+        return userConfig;
+    }
 
     /**
      * quick jump to important contents
@@ -585,7 +633,7 @@ function findMyUserId() {
     };
 
     if (mainConfig.initFavorRecords) {
-        readFavorRecords(favorThreadsCacheAccess, true, async () => {
+        await readFavorRecords(favorThreadsCacheAccess, true, async () => {
             await mainConfigAccess.update(async function (updateUserConfig) {
                 updateUserConfig.initFavorRecords = false;
                 return updateUserConfig
@@ -648,101 +696,94 @@ function findMyUserId() {
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
     const isPostListPage = /fid=\d+/.test(currentUrl) || /forum-(\d+)-\d+\.html/.test(currentUrl);
 
-    const createToggleKVStore = async (storeName) => {
-        let data = await GM.getValue(storeName, {});
-        const updateStore = async () => {
-            await GM.setValue(storeName, data);
-        };
-        return { data, updateStore }
-    }
-
-    const { data: favoriteUsers, updateStore: updateFavoriteUsers } = await createToggleKVStore('favoriteUsers')
-    const { data: blockedUsers, updateStore: updateBlockedUsers } = await createToggleKVStore('blockedUsers')
-
     if (isUserProfilePage) {
-        const userProfileSelector = '#uhd .mt';
-        const userProfileElement = document.querySelector(userProfileSelector);
+        const userProfileElement = document.querySelector('#uhd .mt');
+        const userIdElement = document.querySelector('#uhd .icn a[href*="uid="]')
         if (userProfileElement) {
+            const userId = userIdElement.href.match(/uid=(\d+)/)[1] * 1;
             const username = userProfileElement.textContent.trim();
-            let isFavorited = !!favoriteUsers[username];
-            let isBlocked = !!blockedUsers[username];
 
-            const favoriteButton = document.createElement('button');
-            favoriteButton.innerText = isFavorited ? '取消收藏' : '收藏用户';
-            favoriteButton.className = 'ese-quick-button ese-favorite-button';
-            favoriteButton.style.marginLeft = '10px';
+            function createUpdateUserButton(value, cls, textA, textB) {
+                const btn = document.createElement('button');
+                btn.innerText = value ? textA : textB;
+                btn.className = `ese-quick-button ${cls}`;
+                btn.style.marginLeft = '10px';
+                btn.toggle = (value) => {
+                    btn.innerText = value ? textA : textB;
+                }
+                return btn
+            }
 
-            favoriteButton.addEventListener('click', () => {
-                if (isFavorited) {
+            const userConfig = await getUserConfig(userId, username);
+            const favorBtn = createUpdateUserButton(userConfig?.favored, 'ese-favorite-button', '取消收藏', '收藏用户');
+            const blockedBtn = createUpdateUserButton(userConfig?.blocked, 'ese-block-button', '取消屏蔽', '屏蔽用户');
+
+            favorBtn.addEventListener('click', async () => {
+                const userConfig = await getUserConfig(userId);
+
+                if (userConfig?.favored) {
                     if (confirm(`确定取消收藏用户 ${username} 吗？`)) {
-                        delete favoriteUsers[username];
-                        favoriteButton.innerText = '收藏用户';
-                        isFavorited = false;
+                        await usersConfigCacheAccess.update(async data => {
+                            delete data[userId];
+                            return data;
+                        })
+                        favorBtn.toggle(false);
                     }
                 } else {
                     if (confirm(`确定收藏用户 ${username} 吗？`)) {
-                        favoriteUsers[username] = true;
-                        favoriteButton.innerText = '取消收藏';
-                        isFavorited = true;
-
-                        delete blockedUsers[username];
-                        blokedButton.innerText = '屏蔽用户';
-                        isBlocked = false;
-
+                        await usersConfigCacheAccess.update(async data => {
+                            data[userId] = { username, favored: true }
+                            return data;
+                        })
+                        favorBtn.toggle(true);
+                        blockedBtn.toggle(false);
                     }
                 }
-                updateFavoriteUsers();
-                updateBlockedUsers();
             });
 
-            const blokedButton = document.createElement('button');
-            blokedButton.innerText = isBlocked ? '取消屏蔽' : '屏蔽用户';
-            blokedButton.className = 'ese-quick-button ese-block-button';
-            blokedButton.style.marginLeft = '10px';
-
-            blokedButton.addEventListener('click', () => {
-                if (isBlocked) {
+            blockedBtn.addEventListener('click', async () => {
+                const userConfig = await getUserConfig(userId);
+                if (userConfig?.blocked) {
                     if (confirm(`确定取消屏蔽用户 ${username} 吗？`)) {
-                        delete blockedUsers[username];
-                        blokedButton.innerText = '屏蔽用户';
-                        isBlocked = false;
-
+                        await usersConfigCacheAccess.update(async data => {
+                            delete data[userId];
+                            return data;
+                        })
+                        blockedBtn.toggle(false);
                     }
                 } else {
                     if (confirm(`确定屏蔽用户 ${username} 吗？`)) {
-                        blockedUsers[username] = true;
-                        blokedButton.innerText = '取消屏蔽';
-                        isBlocked = true;
-
-                        delete favoriteUsers[username];
-                        favoriteButton.innerText = '收藏用户';
-                        isFavorited = false;
+                        await usersConfigCacheAccess.update(async data => {
+                            data[userId] = { username, blocked: true }
+                            return data;
+                        })
+                        favorBtn.toggle(false);
+                        blockedBtn.toggle(true);
                     }
                 }
-                updateBlockedUsers();
-                updateFavoriteUsers();
             });
 
-            userProfileElement.appendChild(favoriteButton);
-            userProfileElement.appendChild(blokedButton);
+            userProfileElement.appendChild(favorBtn);
+            userProfileElement.appendChild(blockedBtn);
         }
     }
 
-    const highOrHidePostLists = () => {
+    const highOrHidePostLists = async () => {
+        const usersConfigStore = await usersConfigCacheAccess.read();
         const postsList = document.querySelectorAll('tbody[id^="normalthread_"]')
-        postsList.forEach(postItem => {
+        postsList.forEach(async postItem => {
             const postElement = postItem.querySelector('tr td.by:nth-child(3)');
             const citeElement = postElement.querySelector('cite a');
             const topicTimeSpan = postElement.querySelector('span.xi1 span');
+            const userId = citeElement.href.match(/uid=(\d+)/)[1];
+            const userConfig = await getUserConfig(userId, citeElement.textContent.trim(), usersConfigStore);
 
-            // Highling favorite users
-            if (citeElement && favoriteUsers[citeElement.textContent.trim()]) {
+            if (citeElement && userConfig?.favored) {
                 citeElement.style.fontWeight = 'bold';
                 citeElement.style.color = 'dodgerblue'; // Change color to dodgerblue
             }
 
-            // Hide blocked users' posts
-            if (citeElement && blockedUsers[citeElement.textContent.trim()]) {
+            if (citeElement && userConfig?.blocked) {
                 postItem.style.display = 'none';
             }
 
@@ -757,17 +798,20 @@ function findMyUserId() {
     const isHomepage = window.location.pathname === '/';
 
     if (isHomepage) {
+        const usersConfigStore = await usersConfigCacheAccess.read();
         const posts = document.querySelectorAll('.dxb_bc li')
-        posts.forEach(post => {
-            const username = post.querySelector('em a');
-            // Highling favorite users
-            if (username && favoriteUsers[username.textContent.trim()]) {
-                username.style.fontWeight = 'bold';
-                username.style.color = 'dodgerblue'; // Change color to dodgerblue
+
+        posts.forEach(async post => {
+            const usernameEle = post.querySelector('em a');
+            const userId = usernameEle?.href.match(/uid=(\d+)/)[1];
+            const userConfig = await getUserConfig(userId, usernameEle?.textContent.trim(), usersConfigStore);
+
+            if (usernameEle && userConfig?.favored) {
+                usernameEle.style.fontWeight = 'bold';
+                usernameEle.style.color = 'dodgerblue'; // Change color to dodgerblue
             }
 
-            // Hide blocked users' posts
-            if (username && blockedUsers[username.textContent.trim()]) {
+            if (usernameEle && userConfig?.blocked) {
                 post.style.display = 'none';
             }
         })
@@ -789,8 +833,6 @@ function findMyUserId() {
 
     const isSearchPage = /\/search\.php\?.*searchmd5=.*/.test(currentUrl);
     if (isSearchPage) {
-        const { data: hiddenSections, updateStore: updateHiddenSections } = await createToggleKVStore('hiddenSections');
-
         const threadList = document.querySelectorAll('#threadlist .pbw');
         if (!threadList.length) return;
 
@@ -823,9 +865,10 @@ function findMyUserId() {
             }
         };
 
-        const applyFilterToNewThreads = (newThreads) => {
+        const applyFilterToNewThreads = async (newThreads) => {
+            const  searchHiddenSections = await searchHiddenSectionsAccess.read();
             sectionMap.forEach((section, fid) => {
-                if (hiddenSections[fid]) {
+                if (searchHiddenSections[fid]) {
                     newThreads.forEach(thread => {
                         const link = querySectionLink(thread, fid)
                         if (link) thread.style.display = 'none';
@@ -839,7 +882,8 @@ function findMyUserId() {
         applyFilterToNewThreads(threadList);
 
         // 新建 button、更新数值
-        const updateFilterButtons = () => {
+        const updateFilterButtons = async () => {
+            const searchHiddenSections = await searchHiddenSectionsAccess.read();
             sectionMap.forEach((section, fid) => {
                 const existingButton = document.querySelector(`.ese-filter-button[data-fid="${fid}"]`);
 
@@ -847,32 +891,33 @@ function findMyUserId() {
                     const countElement = existingButton.querySelector('.ese-filter-button-count');
                     const countNum = section.elements.length;
                     countElement.textContent = countNum <= 99 ? countNum : '99+';
-                    existingButton.classList.toggle('ese-hidden', !!hiddenSections[fid]);
+                    existingButton.classList.toggle('ese-hidden', !!searchHiddenSections[fid]);
                 } else {
                     addFilterSectionButton(section, fid);
                 }
             });
         };
 
-        const addFilterSectionButton = (section, fid) => {
+        const addFilterSectionButton = async (section, fid) => {
+            const searchHiddenSections = await searchHiddenSectionsAccess.read()
             const button = document.createElement('a');
             button.className = 'ese-filter-button';
             button.textContent = section.name;
             button.dataset.fid = fid;
-            button.classList.toggle('ese-hidden', !!hiddenSections[fid]);
+            button.classList.toggle('ese-hidden', !!searchHiddenSections[fid]);
 
             const countElement = document.createElement('span');
             countElement.className = 'ese-filter-button-count';
             countElement.textContent = section.elements.length;
             button.insertBefore(countElement, button.firstChild);
 
-            button.addEventListener('click', () => {
-                hiddenSections[fid] = !hiddenSections[fid];
+            button.addEventListener('click', async () => {
+                searchHiddenSections[fid] = !searchHiddenSections[fid];
+                button.classList.toggle('ese-hidden', searchHiddenSections[fid]);
                 section.elements.forEach(thread => {
-                    thread.style.display = hiddenSections[fid] ? 'none' : '';
+                    thread.style.display = searchHiddenSections[fid] ? 'none' : '';
                 });
-                button.classList.toggle('ese-hidden', !!hiddenSections[fid]);
-                updateHiddenSections();
+                await searchHiddenSectionsAccess.update(() => searchHiddenSections)
             });
 
             filterContainer.appendChild(button);
@@ -887,11 +932,11 @@ function findMyUserId() {
         let isLoading = false;
         let lastLoadedTime = Date.now();
 
-        const loadNextPage = () => {
+        const loadNextPage = async () => {
             if (isLoading) return;
 
             const nextPageLink = document.querySelector('.pg a.nxt');
-            if (!nextPageLink) return;
+            if (!nextPageLink) return -1;
 
             isLoading = true;
             const loadingIndicator = createLoadingIndicator('加载中...');
@@ -900,38 +945,39 @@ function findMyUserId() {
             const elapsedTime = Date.now() - lastLoadedTime;
             const waitTime = Math.max(0, LOAD_TIME_LIMIT - elapsedTime);
 
-            setTimeout(() => {
-                fetchGetPage(nextPageLink.href)
-                    .then(doc => {
-                        const errorMessage = doc.querySelector('#messagetext.alert_error');
-                        if (errorMessage && errorMessage.textContent.includes('刷新过于频繁')) {
-                            showRetryIndicator();
-                            setTimeout(loadNextPage, LOAD_TIME_LIMIT);
-                            return;
-                        }
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    fetchGetPage(nextPageLink.href)
+                        .then(async doc => {
+                            const errorMessage = doc.querySelector('#messagetext.alert_error');
+                            if (errorMessage && errorMessage.textContent.includes('刷新过于频繁')) {
+                                showRetryIndicator();
+                                setTimeout(loadNextPage, LOAD_TIME_LIMIT);
+                                return;
+                            }
 
-                        const newThreads = doc.querySelectorAll('#threadlist .pbw');
-                        newThreads.forEach(thread => {
-                            thread.classList.add('ese-fade-in'); // 添加渐入动效类
-                            document.querySelector('#threadlist ul').appendChild(thread);
-                            processThread(thread);
+                            const newThreads = doc.querySelectorAll('#threadlist .pbw');
+                            newThreads.forEach(thread => {
+                                thread.classList.add('ese-fade-in'); // 添加渐入动效类
+                                document.querySelector('#threadlist ul').appendChild(thread);
+                                processThread(thread);
+                            });
+
+                            await applyFilterToNewThreads(newThreads);
+
+                            const newPagination = doc.querySelector('.pgs.cl.mbm');
+                            const pagination = document.querySelector('.pgs.cl.mbm');
+                            if (pagination && newPagination) pagination.replaceWith(newPagination);
+
+                            await updateFilterButtons();
+                            loadingIndicator.remove();
+                            lastLoadedTime = Date.now();
+                        }).finally(() => {
+                            resolve()
+                            isLoading = false;
                         });
-
-                        applyFilterToNewThreads(newThreads);
-
-                        const newPagination = doc.querySelector('.pgs.cl.mbm');
-                        const pagination = document.querySelector('.pgs.cl.mbm');
-                        if (pagination && newPagination) {
-                            pagination.replaceWith(newPagination);
-                        }
-
-                        updateFilterButtons();
-                        loadingIndicator.remove();
-                        lastLoadedTime = Date.now();
-                    }).finally(() => {
-                        isLoading = false;
-                    });
-            }, waitTime);
+                }, waitTime);
+            })
         };
 
         const showRetryIndicator = () => {
@@ -946,21 +992,30 @@ function findMyUserId() {
 
         const loadNextPageIfNeeded = (entries) => {
             entries.forEach(entry => {
-                if (entry.isIntersecting && !isLoading) loadNextPage();
+                if (entry.isIntersecting && !isLoading) {
+                    loadNextPage().then((value) => {
+                        if (value === -1) {
+                            loadNextPageObserver.unobserve(sentinel);
+                            sentinel.remove();
+                        } else {
+                            // 将 sentinel 元素移动到文档末尾
+                            document.body.appendChild(sentinel);
+                        }
+                    });
+                }
             });
         };
-
-        // 使用一个 sentinel 元素
+        
         const sentinel = document.createElement('div');
         sentinel.style.height = '1px';
         document.body.appendChild(sentinel);
-
+        
         const loadNextPageObserver = new IntersectionObserver(loadNextPageIfNeeded, {
             root: null,
             rootMargin: '50% 0px',
             threshold: 0
         });
-
+        
         loadNextPageObserver.observe(sentinel);
     }
 
