@@ -38,6 +38,8 @@
 // @match        *://*.kofqo.net/*
 // @match        *://*.9zi2n.com/*
 // @match        *://*.pky0s.com/*
+// @match        *://*.r88d8.com/*
+// @match        *://*.z0gfi.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
@@ -45,6 +47,7 @@
 // @grant        GM.addStyle
 // @grant        GM.openInTab
 // @grant        GM.registerMenuCommand
+// @grant        GM.notification
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
@@ -52,10 +55,14 @@
 // @grant        GM_addStyle
 // @grant        GM_openInTab
 // @grant        GM.registerMenuCommand
+// @grant        GM_notification
 // @icon         data:image/gif;base64,UklGRgABAABXRUJQVlA4WAoAAAAQAAAADwAADwAAQUxQSKYAAAANgJtt27Hn+v3HtitbrY0BnMrJBJnAWCCt2dk2Ktu2zTcrRMQEgMRWa/XZLCH8bqTqGCAqS3F5ZPmClmdXH6CRDn42AFpJdZfwIeFvn5sVUMsF9gHcHgX0jLdfgpMRtCq+KStAVGIZERAgBATy3+cNB7HX1pZ42V/P68vN2gXPeYZ/zOer4bhy1tEmTfWjn58vA6NXZkkm70fD578A1xVT1uoFLX4CVlA4IDQAAABQAQCdASoQABAAB0CWJbAABe9AAP7msGXYtkQ9eTZz0OaTWMpBhwn6oJ35ZoLVEQcVAAAA
 // @downloadURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.user.js
 // @updateURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
 // ==/UserScript==
+
+const VERSION_MAJOR = 0.1;
+const VERSION_TEXT = '0.1.0';
 
 function initGM() {
     let gmExists = false;
@@ -73,7 +80,8 @@ function initGM() {
             listValues: GM.listValues,
             addStyle: GM.addStyle,
             openInTab: GM.openInTab,
-            registerMenuCommand: GM.registerMenuCommand
+            registerMenuCommand: GM.registerMenuCommand,
+            notification: GM.notification,
         };
     } else {
         return {
@@ -84,6 +92,7 @@ function initGM() {
             addStyle: GM_addStyle,
             openInTab: GM_openInTab,
             registerMenuCommand: GM_registerMenuCommand,
+            notification: GM_notification,
         };
     }
 }
@@ -93,6 +102,10 @@ const MAIN_CONFIG_KEY = '98_main_config';
 const DEFAULT_MAIN_CONFIG = {
     initFavorRecords: true,
     migrateFrom0d0d13: true,
+    openIntroAfterUpdate: true,
+    enableQuickBtn: true,
+    quickBtnPosition: 'right', // left, right
+    enableSortByDateline: false,
 }
 
 const LOAD_TIME_LIMIT = 3000;
@@ -232,161 +245,279 @@ function findMyUserId() {
     const GM = initGM();
 
     const INTRO_POST = document.location.origin + '/forum.php?mod=viewthread&tid=2251912';
-    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=26298171';
+    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=26908095';
+    const CONFIG_PAGE = document.location.origin + '/home.php?mod=spacecp&ac=enhancer';
 
     GM.registerMenuCommand('打开功能简介帖', () => GM.openInTab(INTRO_POST, false));
     GM.registerMenuCommand('查看更新说明', () => GM.openInTab(UPDATE_NOTE, false));
+    GM.registerMenuCommand('打开插件设置页', () => GM.openInTab(CONFIG_PAGE, false));
 
     GM.addStyle(`
-    .ese-quick-button-container {
-        position: fixed;
-        left: calc(50vw + 510px);
-        top: 205px;
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        font-size: 1.1em;
-        margin-top: 0;
-        padding: 0.2em;
-        scrollbar-gutter: stable;
-        scrollbar-width: thin;
-        background: rgba(254, 242, 232, 0.9);
-    }
-    .ese-quick-button {
-        margin: 5px;
-        border: none;
-        cursor: pointer;
-        color: #787878;
-        font-weight: bold;
-        font-family: monospace;
-        margin-right: 0.3em;
-        min-width: 6em;
-        display: inline-block;
-        background: none;
-    }
-    .ese-quick-button:hover { text-decoration: underline; }
-    .ese-favorite-button, .ese-block-button {
-        border: 1px solid;
-        cursor: pointer;
-    }
-    .ese-favorite-button {
-        background: #FEAE10;
-    }
-    .ese-quick-button.ese-active {
-        background-color: #ffffe9;
-        outline: 3px solid lightgray;
-        color: #565656;
-    }
-    .ese-quick-button.ese-active:hover {
-        outline: 3px solid #777;
-    }
-    .ese-quick-button.ese-active:after {
-        content: '✔';
-        position: relative;
-        left: 4px;
-        overflow: hidden;
-        color: goldenrod;
-    }
+.ese-quick-button-container {
+    position: fixed;
+    left: calc(50vw + 510px);
+    top: 205px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    font-size: 1.1em;
+    margin-top: 0;
+    padding: 0.2em;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    background: rgba(254, 242, 232, 0.95);
+}
+.ese-quick-button-container.ese-quick-button-container-left {
+    left: unset;
+    right: calc(50vw + 510px);
+}
+.ese-quick-button {
+    margin: 5px;
+    border: none;
+    cursor: pointer;
+    color: #787878;
+    font-weight: bold;
+    font-family: monospace;
+    margin-right: 0.3em;
+    min-width: 6em;
+    display: inline-block;
+    background: none;
+}
+.ese-quick-button:hover { text-decoration: underline; }
+.ese-favorite-button, .ese-block-button {
+    border: 1px solid;
+    cursor: pointer;
+}
+.ese-favorite-button {
+    background: #FEAE10;
+}
+.ese-quick-button.ese-active {
+    background-color: #ffffe9;
+    outline: 3px solid lightgray;
+    color: #565656;
+}
+.ese-quick-button.ese-active:hover {
+    outline: 3px solid #777;
+}
+.ese-quick-button.ese-active:after {
+    content: '✔';
+    position: relative;
+    left: 4px;
+    overflow: hidden;
+    color: goldenrod;
+}
 
-    /* ========== search page ========== */
-    .ese-filter-container {
-        position: fixed;
-        left: calc(50vw + 200px);
-        top: 105px;
-        display: flex;
-        flex-direction: column;
-        z-index: 9999;
-        width: 140px;
-        padding: 0 2px;
-        max-height: 750px;
-        overflow-y: scroll;
-        overflow-x: hidden;
-        scrollbar-width: none;
-    }
-    .ese-filter-button {
-        color: #333;
-        border: none;
-        padding: 1px 2px;
-        box-shadow: 2px 2px 1px 0 #0009;
-        white-space: pre;
-        font-size: 14px;
-        line-height: 18px;
-        margin: 8px 0;
-        cursor: pointer;
-        outline: 2px solid lightblue;
-        font-weight: bold;
-        background: #EEEE;
-        position: relative;
-        padding-left: 32px;
-    }
-    .ese-filter-button.ese-hidden {
-        color: #CCC;
-        background: #999C;
-        text-decoration: line-through;
-        outline-color: #999;
-    }
-    .ese-filter-button:hover {
-        outline-color: deepskyblue;
-    }
-    .ese-filter-button-count {
-        color: royalblue;
-        padding-right: 10px;
-        position: absolute;
-        left: 4px;
-    }
-    .ese-filter-button.ese-hidden .ese-filter-button-count {
-        color: #CCC;
-    }
-    @keyframes fadeIn {
-        from {
-            opacity: 0;
-        }
-        to {
-            opacity: 1;
-        }
-    }
-    .ese-fade-in {
+/* ========== search page ========== */
+.ese-filter-container {
+    position: fixed;
+    left: calc(50vw + 200px);
+    top: 105px;
+    display: flex;
+    flex-direction: column;
+    z-index: 9999;
+    width: 140px;
+    padding: 0 2px;
+    max-height: 750px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-width: none;
+}
+.ese-filter-button {
+    color: #333;
+    border: none;
+    padding: 1px 2px;
+    box-shadow: 2px 2px 1px 0 #0009;
+    white-space: pre;
+    font-size: 14px;
+    line-height: 18px;
+    margin: 8px 0;
+    cursor: pointer;
+    outline: 2px solid lightblue;
+    font-weight: bold;
+    background: #EEEE;
+    position: relative;
+    padding-left: 32px;
+}
+.ese-filter-button.ese-hidden {
+    color: #CCC;
+    background: #999C;
+    text-decoration: line-through;
+    outline-color: #999;
+}
+.ese-filter-button:hover {
+    outline-color: deepskyblue;
+}
+.ese-filter-button-count {
+    color: royalblue;
+    padding-right: 10px;
+    position: absolute;
+    left: 4px;
+}
+.ese-filter-button.ese-hidden .ese-filter-button-count {
+    color: #CCC;
+}
+@keyframes fadeIn {
+    from {
         opacity: 0;
-        animation: fadeIn 1s forwards;
     }
-    .ese-loading-indicator {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background-color: rgba(0, 0, 0, 0.8);
-        color: #fff;
-        padding: 12px 18px;
-        border-radius: 5px;
-        font-size: 14px;
-        font-weight: bold;
-        box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
-        z-index: 10000;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+    to {
+        opacity: 1;
     }
-    .ese-loading-indicator::before {
-        content: '';
-        display: inline-block;
-        width: 14px;
-        height: 14px;
-        border: 3px solid #fff;
-        border-radius: 50%;
-        border-top-color: transparent;
-        animation: spin 1s linear infinite;
+}
+.ese-fade-in {
+    opacity: 0;
+    animation: fadeIn 1s forwards;
+}
+.ese-loading-indicator {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 12px 18px;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: bold;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ese-loading-indicator::before {
+    content: '';
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 3px solid #fff;
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@media only screen and (max-width: 1280px) {
+    .ese-quick-button-container, .ese-filter-container {
+        left: unset;
+        right: 9px;
+        max-height: 550px;
     }
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
+    .ese-quick-button-container.ese-quick-button-container-left {
+        right: unset;
+        left: 90px;
     }
-    
-    @media only screen and (max-width: 1280px) {
-        .ese-quick-button-container, .ese-filter-container {
-            left: unset;
-            right: 9px;
-            max-height: 550px;
-        }
-    }
+}
+
+/* ====== config ====== */
+.ese-intro-link {
+    margin-left: 7px;
+    color: cornflowerblue;
+    font-weight: bold;
+}
+.ese-config-panel-container {
+    margin: 8px;
+}
+.ese-dialog-modal-mask {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #FFF8;
+    z-index: 100;
+}
+.ese-config-panel.ese-config-saving {
+    cursor: wait;
+}
+.ese-config-panel.ese-config-saving .ese-config-list {
+    opacity: 0.5;
+    pointer-events: none;
+}
+.ese-config-list {
+    margin: 0 5px;
+}
+.ese-config-list > dt {
+    margin-top: 5px;
+}
+.ese-config-list > dt > a {
+    margin-left: 3px;
+    color: #0060df;
+    cursor: pointer;
+}
+.ese-config-list > dt > a:hover {
+    text-decoration: underline;
+}
+.ese-config-item-sep {
+    margin-top: 0.5em;
+    padding-top: 0.5em;
+    border-top: 1px dotted #AAA;
+}
+.ese-config-item-tip {
+    color: #105884;
+    padding-left: 4px;
+}
+.ese-config-item-lv1 > span {
+    margin-left: 3px;
+}
+.ese-config-item-lv2 {
+    margin-left: 20px;
+}
+.ese-config-item-lv3 {
+    margin-left: 40px;
+}
+.ese-config-item-lv1:not(.ese-config-item-checked) + .ese-config-item-lv2:not(.ese-config-item-tip),
+.ese-config-item-lv1:not(.ese-config-item-checked) + .ese-config-item-lv2 + .ese-config-item-lv2:not(.ese-config-item-tip),
+.ese-config-item-lv1:not(.ese-config-item-checked) + .ese-config-item-lv2 + .ese-config-item-lv2 + .ese-config-item-lv2:not(.ese-config-item-tip) {
+    opacity: 0.2;
+    pointer-events: none;
+}
+.ese-config-item-lv2:not(.ese-config-item-checked) + .ese-config-item-lv3:not(.ese-config-item-tip),
+.ese-config-item-lv2:not(.ese-config-item-checked) + .ese-config-item-lv3 + .ese-config-item-lv3:not(.ese-config-item-tip),
+.ese-config-item-lv2:not(.ese-config-item-checked) + .ese-config-item-lv3 + .ese-config-item-lv3 + .ese-config-item-lv3:not(.ese-config-item-tip) {
+    opacity: 0.2;
+    pointer-events: none;
+}
+.ese-user-map-icon {
+    margin-left: 5px;
+    cursor: pointer;
+}
+.ese-user-map-icon.ese-config-saving {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.ese-user-map-icon::after {
+    content: "➕收藏";
+    font-weight: normal;
+    font-size: 12px;
+}
+.ese-user-map-icon.ese-user-mapped::after {
+    content: "🔖 " attr(ese-nickname);
+    font-weight: normal;
+    font-size: 12px;
+    color: #c30a0a;
+}
+.ese-user-tag {
+    margin-right: 6px;
+    white-space: nowrap;
+    min-width: 9em;
+    display: inline-block;
+    max-width: 9em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ese-user-tag-icon::before {
+    content: "🔖 ";
+    font-size: 14px;
+    display: inline-block;
+    cursor: pointer;
+}
+.ese-user-blacklist .ese-user-tag-icon::before {
+    content: "🚫 ";
+}
     `)
 
     const myUserId = findMyUserId();
@@ -419,6 +550,20 @@ function findMyUserId() {
             mainCfg.migrateFrom0d0d13 = false;
             return mainCfg
         })
+    }
+
+    if (mainConfig.openIntroAfterUpdate) {
+        const lastVersion = await GM.getValue('last_version') * 1||0;
+        if (VERSION_MAJOR > lastVersion) {
+            await GM.setValue('last_version', String(VERSION_MAJOR));
+            GM.notification({
+                title: `色花堂强化脚本 已更新 ver.${VERSION_MAJOR}`,
+                text: "请参阅功能简介帖"
+            });
+            if (confirm(`色花堂强化脚本 已更新 ${VERSION_MAJOR}，打开功能简介帖？(新页面)`)) {
+                GM.openInTab(UPDATE_NOTE, false);
+            }
+        }
     }
 
     const getUserConfig = async (userId, username, store) => {
@@ -577,9 +722,10 @@ function findMyUserId() {
     };
 
     const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'ese-quick-button-container';
+    buttonContainer.className = mainConfig.quickBtnPosition === 'left' ? 'ese-quick-button-container ese-quick-button-container-left' : 'ese-quick-button-container'
 
     const updateButtonStates = () => {
+        if (mainConfig.enableQuickBtn === false) return;
         buttonContainer.innerHTML = ''; // 清空现有按钮，防止重复添加
 
         const url = new URL(window.location);
@@ -695,6 +841,45 @@ function findMyUserId() {
     const currentUrl = window.location.href;
     const isUserProfilePage = /mod=space&uid=\d+|space-uid-\d+/.test(currentUrl);
     const isPostListPage = /fid=\d+/.test(currentUrl) || /forum-(\d+)-\d+\.html/.test(currentUrl);
+    const isFavoriteListPage = /&do=favorite.*/.test(currentUrl);
+
+    if (isFavoriteListPage) {
+        const observeRateForm = () => {
+            const rateObserver = new MutationObserver((mutations, obs) => {
+                const confirmDelForm = document.querySelector('form[id^="favoriteform_"]');
+                if (confirmDelForm) {
+                    confirmDelForm.addEventListener('submit', () => {
+                        favorThreadsCacheAccess.update(cache => {
+                            let favId = confirmDelForm.id.match(/favoriteform_(\d+)/)
+                            if (favId) {
+                                favId = favId[1]
+                                Object.entries(cache.data).forEach(([key, value]) => {
+                                    if (Number(favId) === value) delete cache.data[key]
+                                })
+                            }
+                            return cache
+                        })
+                    })
+                }
+
+                const confirmBatchDelForm = document.querySelector("#delform")
+                if (confirmBatchDelForm) {
+                    confirmBatchDelForm.addEventListener('submit', () => {
+                        favorThreadsCacheAccess.update(cache => {
+                            const favIds = []
+                            confirmBatchDelForm.querySelectorAll("li input").forEach(o => { if (o.checked) favIds.push(o.getAttribute('vid')) })
+                            favIds.forEach(id => delete cache.data[id])
+                            return cache
+                        })
+                    })
+                }
+            });
+    
+            rateObserver.observe(document.body, { childList: true, subtree: true });
+        };
+
+        observeRateForm();
+    }
 
     if (isUserProfilePage) {
         const userProfileElement = document.querySelector('#uhd .mt');
@@ -732,6 +917,7 @@ function findMyUserId() {
                 } else {
                     if (confirm(`确定收藏用户 ${username} 吗？`)) {
                         await usersConfigCacheAccess.update(async data => {
+                            delete data[username]; // 兼容 0.0.13 旧数据
                             data[userId] = { username, favored: true }
                             return data;
                         })
@@ -754,6 +940,7 @@ function findMyUserId() {
                 } else {
                     if (confirm(`确定屏蔽用户 ${username} 吗？`)) {
                         await usersConfigCacheAccess.update(async data => {
+                            delete data[username]; // 兼容 0.0.13 旧数据
                             data[userId] = { username, blocked: true }
                             return data;
                         })
@@ -1019,32 +1206,197 @@ function findMyUserId() {
         loadNextPageObserver.observe(sentinel);
     }
 
-    /** section links sort default by datetime */
-    const setCustomSectionLink = () => {
-        document.body.addEventListener('click', event => {
-            const link = event.target.closest('a[href*="forum.php?mod=forumdisplay"], a[href*="forum-"]');
-            if (!link) return;
+    if (mainConfig.enableSortByDateline === true) {
+        /** section links default sort by datetime */
+        const setCustomSectionLink = () => {
+            document.body.addEventListener('click', event => {
+                const link = event.target.closest('a[href*="forum.php?mod=forumdisplay"], a[href*="forum-"]');
+                if (!link) return;
 
-            event.preventDefault();
-            let url = new URL(link.href, window.location.origin);
+                event.preventDefault();
+                let url = new URL(link.href, window.location.origin);
 
-            if (url.pathname.includes('forum.php')) {
+                if (url.pathname.includes('forum.php')) {
+                    if (!url.searchParams.get("orderby")) {
+                        url.searchParams.set('filter', 'author')
+                        url.searchParams.set('orderby', 'dateline')
+                    }
+                } else if (url.pathname.match(/forum-\d+-\d+\.html/)) {
+                    const fid = url.pathname.split('-')[1];
+                    url = new URL(`/forum.php?mod=forumdisplay&fid=${fid}&filter=author&orderby=dateline`, window.location.origin);
+                }
+
+                window.location.href = url;
+            });
+            document.querySelectorAll('a[rel*="forum.php?mod=forumdisplay"]').forEach(nxt => { // next page
+                let url = new URL(nxt.rel, window.location.origin);
                 if (!url.searchParams.get("orderby")) url.searchParams.set('orderby', 'dateline');
-            } else if (url.pathname.match(/forum-\d+-\d+\.html/)) {
-                const fid = url.pathname.split('-')[1];
-                url = new URL(`/forum.php?mod=forumdisplay&fid=${fid}&orderby=dateline`, window.location.origin);
+                nxt.setAttribute('rel', url)
+            })
+        }
+        setCustomSectionLink()
+    }
+
+    const initConfigPanel = () => {
+        /** 插件配置页 */
+        const isEnhancerPanel = /&ac=enhancer/.test(currentUrl);
+        const enhancerUrl = 'home.php?mod=spacecp&ac=enhancer';
+        const CONFIG_PANEL_NAME = "增强插件"
+
+        const renderConfigForm = () => {
+            const uselessElements = document.querySelectorAll("#ct #frame_profile, #ct form[target='frame_profile']")
+            uselessElements.forEach(ele => ele.remove())
+            const configPanel = document.querySelector("#ct .bm.bw0")
+            const configList = addElem(configPanel, 'div', "ese-config-panel-container")
+            const introItem = addElem(configList, 'dt', 'ese-config-item-lv1 ese-config-item-checked');
+            addElem(introItem, 'a', 'ese-intro-link', { href: INTRO_POST, target: '_blank' }).textContent = '🔗 捷径: 功能简介帖';
+            putCheckBoxItem('新功能更新后 自动打开更新说明', 'openIntroAfterUpdate', 2);
+            addElem(configList, 'dt', 'ese-config-item-sep ese-config-item-lv1').textContent = '论坛设置';
+
+            const quickBtnItem = putCheckBoxItem('在读帖时添加快捷按钮', 'enableQuickBtn');
+            addElem(configList, 'dt', 'ese-config-item-tip ese-config-item-lv2').textContent = '💡 阅读帖子时的快捷按钮（一键收藏、快捷评分、滚动到附件等）';
+            addElem(quickBtnItem, 'span').textContent = '🔹位置 ';
+
+            const quickBtnPosSelect = addElem(quickBtnItem, 'select');
+            addElem(quickBtnPosSelect, 'option', null, { value: 'left' }).textContent = '页面左侧';
+            addElem(quickBtnPosSelect, 'option', null, { value: 'right' }).textContent = '页面右侧';
+            quickBtnPosSelect.value = mainConfig.quickBtnPosition;
+            quickBtnPosSelect.value = quickBtnPosSelect.value || 'right';
+            quickBtnPosSelect.addEventListener('change', () => {
+                configPanel.classList.add('ese-config-saving');
+                mainConfigAccess.update(function(updatingUserConfig) {
+                    updatingUserConfig.quickBtnPosition = quickBtnPosSelect.value;
+                    return updatingUserConfig;
+                })
+                .finally(function() {
+                    configPanel.classList.remove('ese-config-saving');
+                    window.location.reload();
+                });
+            });
+
+            putCheckBoxItem('帖子按时间排序', 'enableSortByDateline');
+            addElem(configList, 'dt', 'ese-config-item-tip ese-config-item-lv2').textContent = '💡 板块内帖子按时间排序（默认关闭。目前仅支持全部开启或全部关闭，后续将支持按常用分区配置）';
+
+            async function renderUserList(heading, listClass, filterKey, clickIconText, confirmMessage) {
+                const listHeading = addElem(configList, 'h5', null, { style: 'line-height:32px;' });
+                addElem(listHeading, 'span').textContent = heading;
+                addElem(listHeading, 'span', null, { style: 'font-weight:normal' }).textContent = ` 点击${clickIconText}移除`;
+                
+                const userListBlock = addElem(configList, 'dt', listClass);
+                const userItemComparator = comparator('username');
+                const usersConfigStore = await usersConfigCacheAccess.read();
+                
+                Object.entries(usersConfigStore)
+                    .filter(entry => entry[1][filterKey])
+                    .sort((et1, et2) => userItemComparator(et1[1], et2[1]))
+                    .forEach(entry => {
+                        const userId = entry[0];
+                        const { username: userNickName } = entry[1];
+                        const userTag = addElem(userListBlock, 'span', 'ese-user-tag', { title: userNickName });
+                        userListBlock.appendChild(document.createTextNode(' '));
+                        const userTagIcon = addElem(userTag, 'span', 'ese-user-tag-icon');
+                        
+                        const userLink = addElem(userTag, 'a', null, {
+                            href: !isNaN(Number(userId)) ?
+                              `home.php?mod=space&uid=${userId}` :
+                              `home.php?mod=spacecp&ac=search&username=${userId}&searchsubmit=yes`, // 兼容 0.0.13 旧数据
+                            target: '_blank'
+                        });
+                        userLink.textContent = userNickName;
+            
+                        userTagIcon.addEventListener('click', function() {
+                            if (confirm(`${confirmMessage} (${userNickName})？`)) {
+                                configPanel.classList.add('ese-config-saving');
+                                usersConfigCacheAccess.update(data => {
+                                    delete data[userId];
+                                    userTag.remove();
+                                    return data;
+                                });
+                            }
+                        });
+                    });
+            }
+            
+            renderUserList('收藏用户管理', 'ese-nickname-list', 'favored', '🔖', '取消收藏');
+            renderUserList('屏蔽用户管理', 'ese-user-blacklist', 'blocked', '🚫', '取消屏蔽');
+
+            function putCheckBoxItem(label, propertyNameOrAccessor, level, inverted) {
+                let propertyAccess;
+                if (typeof propertyNameOrAccessor === 'string') {
+                    propertyAccess = {
+                        get() {
+                            return !!mainConfig[propertyNameOrAccessor];
+                        },
+                        update(newValue) {
+                            return mainConfigAccess.update(function(updatingUserConfig) {
+                                updatingUserConfig[propertyNameOrAccessor] = newValue;
+                                return updatingUserConfig;
+                            });
+                        }
+                    };
+                } else {
+                    propertyAccess = propertyNameOrAccessor;
+                }
+                const configItem = addElem(configList, 'dt', `ese-config-item-lv${level||1}`);
+                const checkboxLabel = addElem(configItem, 'label');
+                const checkbox = addElem(checkboxLabel, 'input', null, { type: 'checkbox' });
+                checkboxLabel.appendChild(document.createTextNode(' ' + label));
+                checkbox.checked = propertyAccess.get();
+                updateStyle();
+                function updateStyle() {
+                    const checkedValue = !inverted; // when inverted false is considered checked
+                    if (checkbox.checked === checkedValue) {
+                        configItem.classList.add('ese-config-item-checked');
+                    } else {
+                        configItem.classList.remove('ese-config-item-checked');
+                    }
+                }
+                checkbox.addEventListener('change', async function() {
+                    configPanel.classList.add('ese-config-saving');
+                    const newValue = checkbox.checked;
+                    propertyAccess.update(newValue)
+                        .finally(function() {
+                            configPanel.classList.remove('ese-config-saving');
+                            updateStyle();
+                        });
+                });
+                return configItem;
             }
 
-            window.location.href = url;
-        });
-        document.querySelectorAll('a[rel*="forum.php?mod=forumdisplay"]').forEach(nxt => {
-            // 下一页
-            let url = new URL(nxt.rel, window.location.origin);
-            if (!url.searchParams.get("orderby")) url.searchParams.set('orderby', 'dateline');
-            nxt.rel = url
-        })
+        }
+
+        const sideTab = document.querySelector("#ct .tbn ul")
+        if (!sideTab) return
+        const newLi = addElem(sideTab, "li")
+        const newLink = addElem(newLi, "a", "", { href: enhancerUrl });
+        newLink.textContent = CONFIG_PANEL_NAME
+
+        if (isEnhancerPanel) {
+            const panelTitleEle = document.querySelector("#ct .tb.cl a")
+            if (!panelTitleEle) return
+            panelTitleEle.innerText = CONFIG_PANEL_NAME
+            panelTitleEle.href = enhancerUrl
+
+            const breadcrumbEle = document.querySelector("#pt .z");
+            breadcrumbEle.innerHTML = breadcrumbEle.innerHTML.replace(/个人资料/g, CONFIG_PANEL_NAME);
+
+            const sideTabLi = document.querySelectorAll("#ct .tbn ul li")
+            sideTabLi.forEach(li => {
+                const a = li.querySelector('a');
+                if (a.href.includes(enhancerUrl)) {
+                    li.classList.add('a')
+                } else {
+                    li.classList.remove('a')
+                }
+            })
+            renderConfigForm()
+        }
     }
-    setCustomSectionLink()
+
+    const isSpacePage = /\/home\.php\?mod=spacecp.*/.test(currentUrl);
+    if (isSpacePage) {
+        initConfigPanel()
+    }
 })();
 
 //============= utils =============//
@@ -1070,6 +1422,15 @@ function getVerifyHash() {
         }
     }
     alert('无法取得操作验证码 (运作环境错误，请用篡改猴及谷歌火狐等主流浏览器)');
+}
+
+function comparator(prop, reversed) {
+    const reverser = reversed ? -1 : 1;
+    return (x, y) => {
+        const xv = typeof prop === 'function' ? prop(x) : prop ? x[prop] : x;
+        const yv = typeof prop === 'function' ? prop(y) : prop ? y[prop] : y;
+        return xv > yv ? reverser : xv < yv ? -reverser : 0;
+    };
 }
 
 // polyfill replacement
@@ -1124,4 +1485,140 @@ async function fetchGetPage(url, docType, autoRetry) {
 function findErrorMessage(doc) {
     let err = doc.querySelector('#messagetext > p');
     return err ? err.textContent.trim() || '不明错误' : null;
+}
+
+function addElem(parent, tag, styleClass, attrs) {
+    const elem = newElem(tag, styleClass, attrs);
+    parent.appendChild(elem);
+    return elem;
+}
+
+function newElem(tag, styleClass, attrs) {
+    const elem = document.createElement(tag);
+    if (styleClass) {
+        styleClass.split(' ').forEach(function(cls) {
+            elem.classList.add(cls);
+        });
+    }
+    if (attrs) {
+        for (let name of Object.keys(attrs)) {
+            elem.setAttribute(name, attrs[name]);
+        }
+    }
+    return elem;
+}
+
+function addModalMask() {
+    return addElem(document.body, 'div', 'ese-dialog-modal-mask');
+}
+
+function createPopupMenu(popupId, anchor, rightAligned, verticallyInverted) {
+    function computeStyle(hShift) {
+        if (anchor) {
+            const bounds = anchor.getClientRects()[0];
+            const left = bounds.x + hShift;
+            if (verticallyInverted) {
+                return 'opacity: 0.95; left: ' + left.toFixed(0) + 'px; z-index: 3000; visibility: visible; top: ' + (bounds.top + document.documentElement.scrollTop).toFixed(0) + 'px; transform: translateY(-100%);';
+            } else {
+                return 'opacity: 0.95; left: ' + left.toFixed(0) + 'px; z-index: 3000; visibility: visible; top: ' + (bounds.height + bounds.top + document.documentElement.scrollTop).toFixed(0) + 'px;';
+            }
+        } else {
+            return 'position: fixed; opacity: 0.95; left: calc(50vw - 400px); z-index: 3000; visibility: visible; top: 10vh';
+        }
+
+    }
+    const menuElem = addElem(document.body, 'div', 'menu ese-common-popup-menu', {
+        id: popupId,
+        style: computeStyle(0)
+    });
+
+    // just copy-n-paste from site, lol
+    menuElem.innerHTML = `<div class="bor" style="padding:13px 30px"><img src="images/loading.gif" align="absbottom"> 正在加载数据...</div>`;
+
+    return {
+        renderContent(renderer) {
+            menuElem.innerHTML = '';
+            const borElem = addElem(menuElem, 'div', 'bor');
+            renderer(borElem);
+            if (rightAligned) {
+                menuElem.setAttribute('style', computeStyle(-menuElem.getClientRects()[0].width));
+            }
+        }
+    };
+}
+
+async function setupPopupMenu(config) {
+    const menuConfig = {
+        title: '',
+        width: 120,
+        popupMenuId: '',
+        anchor: null,
+        rightAligned: false,
+        verticallyInverted: false,
+        onClose: () => {},
+        items: [] // [ { label, class, action } ]
+    };
+    Object.assign(menuConfig, config);
+
+    const modelMask = addModalMask();
+    const popupMenu = createPopupMenu(menuConfig.popupMenuId, menuConfig.anchor, menuConfig.rightAligned, menuConfig.verticallyInverted);
+    function close() {
+        modelMask.remove();
+        closePopupMenu(menuConfig.popupMenuId);
+        menuConfig.onClose();
+    }
+    modelMask.addEventListener('click', () => close());
+
+    popupMenu.renderContent(async function(borElem) {
+        const tableElem = addElem(borElem, 'table', null, {
+            width: `${menuConfig.width}`,
+            cellspacing: '0',
+            cellpadding: '0'
+        });
+
+        const tbodyElem = addElem(tableElem, 'tbody');
+        const trElem1 = addElem(tbodyElem, 'tr');
+        const thElem1_1 = addElem(trElem1, 'th', 'h');
+        const frElem1 = addElem(thElem1_1, 'span', 'fr', {
+            style: 'margin-top:2px;cursor:pointer'
+        });
+        frElem1.addEventListener('click', () => close());
+        addElem(frElem1, 'img', null, {
+            src: 'images/close.gif'
+        });
+        thElem1_1.appendChild(document.createTextNode(menuConfig.title));
+
+        function addButton(item) {
+            const trElem = addElem(tbodyElem, 'tr');
+            const tdElem = addElem(trElem, 'td', item.cellClass||null);
+            const button = addElem(tdElem, 'a', item.class||null);
+            button.textContent = item.label;
+            if (item.action == null) {
+                // nothing
+            } else if (typeof item.action === 'string') {
+                button.setAttribute('href', item.action);
+                if (item.target) {
+                    button.setAttribute('target', item.target);
+                }
+            } else {
+                button.setAttribute('href', 'javascript:');
+                button.addEventListener('click', () => {
+                    close();
+                    setTimeout(() => item.action());
+                    return false;
+                });
+            }
+            return button;
+        }
+        menuConfig.items.forEach(item => {
+            addButton(item);
+        });
+    });
+}
+
+function closePopupMenu(popupId) {
+    const menu = document.getElementById(popupId);
+    if (menu) {
+        menu.remove();
+    }
 }
