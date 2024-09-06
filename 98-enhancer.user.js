@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.1.0
+// @version      0.1.1
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -62,7 +62,7 @@
 // ==/UserScript==
 
 const VERSION_MAJOR = 0.1;
-const VERSION_TEXT = '0.1.0';
+const VERSION_TEXT = '0.1.1';
 
 function initGM() {
     let gmExists = false;
@@ -883,9 +883,9 @@ function findMyUserId() {
 
     if (isUserProfilePage) {
         const userProfileElement = document.querySelector('#uhd .mt');
-        const userIdElement = document.querySelector('#uhd .icn a[href*="uid="]')
+        const userId = extractUidFromURL(currentUrl)
+
         if (userProfileElement) {
-            const userId = userIdElement.href.match(/uid=(\d+)/)[1] * 1;
             const username = userProfileElement.textContent.trim();
 
             function createUpdateUserButton(value, cls, textA, textB) {
@@ -962,7 +962,7 @@ function findMyUserId() {
             const postElement = postItem.querySelector('tr td.by:nth-child(3)');
             const citeElement = postElement.querySelector('cite a');
             const topicTimeSpan = postElement.querySelector('span.xi1 span');
-            const userId = citeElement.href.match(/uid=(\d+)/)[1];
+            const userId = extractUidFromURL(citeElement.href);
             const userConfig = await getUserConfig(userId, citeElement.textContent.trim(), usersConfigStore);
 
             if (citeElement && userConfig?.favored) {
@@ -990,7 +990,7 @@ function findMyUserId() {
 
         posts.forEach(async post => {
             const usernameEle = post.querySelector('em a');
-            const userId = usernameEle?.href.match(/uid=(\d+)/)[1];
+            const userId = extractUidFromURL(usernameEle?.href);
             const userConfig = await getUserConfig(userId, usernameEle?.textContent.trim(), usersConfigStore);
 
             if (usernameEle && userConfig?.favored) {
@@ -1431,6 +1431,16 @@ function comparator(prop, reversed) {
         const yv = typeof prop === 'function' ? prop(y) : prop ? y[prop] : y;
         return xv > yv ? reverser : xv < yv ? -reverser : 0;
     };
+}
+
+function extractUidFromURL(url = "") {
+    const pattern = /uid=(\d+)|space-uid-(\d+)\.html/;
+    const match = url.match(pattern);
+    if (match) {
+        const uid = match[1] || match[2];
+        return Number(uid);
+    }
+    return null;
 }
 
 // polyfill replacement
