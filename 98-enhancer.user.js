@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.1.1
+// @version      0.2.0
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -40,6 +40,7 @@
 // @match        *://*.pky0s.com/*
 // @match        *://*.r88d8.com/*
 // @match        *://*.z0gfi.com/*
+// @match        *://*.xj4sds.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
@@ -61,8 +62,8 @@
 // @updateURL https://update.sleazyfork.org/scripts/503560/%E8%89%B2%E8%8A%B1%E5%A0%82%2098%E5%A0%82%20%E5%BC%BA%E5%8C%96%E8%84%9A%E6%9C%AC.meta.js
 // ==/UserScript==
 
-const VERSION_MAJOR = 0.1;
-const VERSION_TEXT = '0.1.1';
+const VERSION_MAJOR = 0.2;
+const VERSION_TEXT = '0.2.0';
 
 function initGM() {
     let gmExists = false;
@@ -106,6 +107,12 @@ const DEFAULT_MAIN_CONFIG = {
     enableQuickBtn: true,
     quickBtnPosition: 'right', // left, right
     enableSortByDateline: false,
+
+    enableAutoPaginationSearch: true,
+    enableAutoPaginationSection: true,
+    enableAutoPaginationUserProfile: true,
+    enableSectionFilterSearch: true,
+    enableSectionFilterUserProfile: true,
 }
 
 const LOAD_TIME_LIMIT = 3000;
@@ -219,8 +226,7 @@ async function readRatedRecords(ratedThreadsCacheAccess) {
 }
 
 const createLoadingIndicator = (message) => {
-    const indicator = document.createElement('div');
-    indicator.className = 'ese-loading-indicator';
+    const indicator = addElem(document.body, 'div', 'ese-loading-indicator');
     indicator.textContent = message;
     return indicator;
 };
@@ -240,12 +246,37 @@ function findMyUserId() {
     return -1; // 未登录情况下，后续添加账号迁移功能
 }
 
+const COMMON_JS_FILENAME = 'static/js/common.js'
+function isCommonJsLoaded() {
+    return new Promise((resolve) => {
+        const script = document.querySelector(`script[src^="${COMMON_JS_FILENAME}"]`);
+        if (script) {
+            resolve(true)
+        }
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.addedNodes.length) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.tagName === 'SCRIPT' && node.src.includes(COMMON_JS_FILENAME)) {
+                            node.addEventListener('load', () => {
+                                observer.disconnect();
+                                resolve(true);
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        observer.observe(document.head, { childList: true });
+    });
+}
+
 (async function () {
     'use strict';
     const GM = initGM();
 
     const INTRO_POST = document.location.origin + '/forum.php?mod=viewthread&tid=2251912';
-    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=26908095';
+    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=27387253';
     const CONFIG_PAGE = document.location.origin + '/home.php?mod=spacecp&ac=enhancer';
 
     GM.registerMenuCommand('打开功能简介帖', () => GM.openInTab(INTRO_POST, false));
@@ -284,6 +315,17 @@ function findMyUserId() {
     background: none;
 }
 .ese-quick-button:hover { text-decoration: underline; }
+.ese-thread-bottom-button, .ese-thread-userinfo-button {
+    cursor: pointer;
+}
+.authi .ese-thread-userinfo-button {
+    opactity: 0.8;
+    visibility: hidden;
+}
+.authi:hover .ese-thread-userinfo-button {
+    opactity: 1;
+    visibility: visible;
+}
 .ese-favorite-button, .ese-block-button {
     border: 1px solid;
     cursor: pointer;
@@ -519,8 +561,9 @@ function findMyUserId() {
     content: "🚫 ";
 }
     `)
-
+    await isCommonJsLoaded();
     const myUserId = findMyUserId();
+
     const mainConfigAccess = initConfigAccess(myUserId, MAIN_CONFIG_KEY, DEFAULT_MAIN_CONFIG);
     const favorThreadsCacheAccess = initConfigAccess(myUserId, FAVOR_THREADS_CACHE_CONFIG_KEY, DEFAULT_FAVOR_THREADS_CACHE_CONFIG);
     const ratedThreadsCacheAccess = initConfigAccess(myUserId, RATED_THREADS_CACHE_CONFIG_KEY, DEFAULT_RATED_THREADS_CACHE_CONFIG);
@@ -557,10 +600,10 @@ function findMyUserId() {
         if (VERSION_MAJOR > lastVersion) {
             await GM.setValue('last_version', String(VERSION_MAJOR));
             GM.notification({
-                title: `色花堂强化脚本 已更新 ver.${VERSION_MAJOR}`,
+                title: `色花堂强化脚本 已更新 ver.${VERSION_TEXT}`,
                 text: "请参阅功能简介帖"
             });
-            if (confirm(`色花堂强化脚本 已更新 ${VERSION_MAJOR}，打开功能简介帖？(新页面)`)) {
+            if (confirm(`色花堂强化脚本 已更新 ${VERSION_TEXT}，打开功能简介帖？(新页面)`)) {
                 GM.openInTab(UPDATE_NOTE, false);
             }
         }
@@ -678,10 +721,17 @@ function findMyUserId() {
                         btn.dataset.rated = rated;
                         if (rated) btn.classList.add('ese-active');
                     });
-
             },
-            onClick: (element, tid) => {
+            onClick: async (element, tid) => {
                 element.click();
+                observeAlreadyRateForm(async () => {
+                    await ratedThreadsCacheAccess.update(cache => {
+                        if (cache && cache.data) {
+                            cache.data[tid] = true;
+                            return cache;
+                        }
+                    });
+                });
                 observeRateForm();
                 observeRateLoadingElement(async () => {
                     await ratedThreadsCacheAccess.update(cache => {
@@ -698,12 +748,10 @@ function findMyUserId() {
         { selector: '.blockcode', text: '🧲 链接' },
     ];
 
-    const createButton = ({ text, onClick, title, ariaLabel }) => {
-        const button = document.createElement('button');
+    const createQuickButton = (parent, { text, onClick, title, ariaLabel }) => {
+        const button = addElem(parent, 'button', 'ese-quick-button', { 'aria-label': ariaLabel })
         button.innerText = text;
-        button.className = 'ese-quick-button';
         button.title = title;
-        button.setAttribute('aria-label', ariaLabel);
         if (onClick) button.addEventListener('click', onClick);
         return button;
     };
@@ -734,7 +782,7 @@ function findMyUserId() {
         elementsToCheck.forEach(({ selector, text, onClick, init }) => {
             const element = document.querySelector(selector);
             if (element) {
-                const quickBtn = createButton({ text, title: element.textContent.trim(), ariaLabel: element.textContent.trim() });
+                const quickBtn = createQuickButton(buttonContainer, { text, title: element.textContent.trim(), ariaLabel: element.textContent.trim() });
 
                 quickBtn.addEventListener('click', () => {
                     if (typeof onClick === 'function') {
@@ -747,21 +795,18 @@ function findMyUserId() {
                 if (typeof init === 'function') {
                     init(quickBtn)
                 }
-
-                buttonContainer.appendChild(quickBtn);
             }
         });
 
         // 更新附件按钮
         const updateAttachmentButtons = () => {
             const createAndAppendButton = (element) => {
-                const button = createButton({
+                createQuickButton(buttonContainer, {
                     text: '📎 附件',
                     title: element.textContent.trim(),
                     ariaLabel: element.textContent.trim(),
                     onClick: () => scrollToElement(element)
                 });
-                buttonContainer.appendChild(button);
             };
 
             // 更新常规附件按钮
@@ -788,7 +833,7 @@ function findMyUserId() {
         })
     }
 
-    const observeRateLoadingElement = async (callback) => {
+    const observeRateLoadingElement = async (cb) => {
         let loadingElementVisible = false;
 
         const loadingObserver = new MutationObserver(async (mutations, observer) => {
@@ -800,16 +845,27 @@ function findMyUserId() {
 
             if (!loadingElement && loadingElementVisible) {
                 loadingElementVisible = false;
-                if (typeof callback === 'function') await callback()
+                if (typeof cb === 'function') await cb()
                 updateButtonStates();
                 loadingObserver.disconnect();
             }
         });
 
-        loadingObserver.observe(document.body, {
-            childList: true,
-            subtree: true,
+        loadingObserver.observe(document.body, { childList: true, subtree: true });
+    };
+
+    const observeAlreadyRateForm = async (cb) => {
+        let clicked = false;
+        const rateObserver = new MutationObserver(async (mutations, obs) => {
+            const rateForm = document.querySelector('#fwin_content_rate .alert_error');
+            if (rateForm?.textContent.includes("您不能对同一个帖子重复评分") && !clicked) {
+                clicked = true;
+                cb && await cb()
+                updateButtonStates();
+                obs.disconnect(); // 停止观察表单
+            }
         });
+        rateObserver.observe(document.body, { childList: true, subtree: true });
     };
 
     const observeRateForm = () => {
@@ -824,7 +880,6 @@ function findMyUserId() {
                 obs.disconnect(); // 停止观察表单
             }
         });
-
         rateObserver.observe(document.body, { childList: true, subtree: true });
     };
 
@@ -881,6 +936,60 @@ function findMyUserId() {
         observeRateForm();
     }
 
+    const blockUser = async (userId, username, { blockedBtn, favorBtn } = {}) => {
+        let toggled = false;
+        const userConfig = await getUserConfig(userId);
+        if (userConfig?.blocked) {
+            if (confirm(`确定取消屏蔽用户 ${username} 吗？`)) {
+                await usersConfigCacheAccess.update(async data => {
+                    delete data[userId];
+                    return data;
+                })
+                toggled = true;
+                blockedBtn?.toggle(false);
+            }
+        } else {
+            if (confirm(`确定屏蔽用户 ${username} 吗？`)) {
+                await usersConfigCacheAccess.update(async data => {
+                    delete data[username]; // 兼容 0.0.13 旧数据
+                    data[userId] = { username, blocked: true }
+                    return data;
+                })
+                toggled = true;
+                favorBtn?.toggle(false);
+                blockedBtn?.toggle(true);
+            }
+        }
+        return toggled;
+    }
+
+    const favorUser = async (userId, username, { blockedBtn, favorBtn } = {}) => {
+        let toggled = false;
+        const userConfig = await getUserConfig(userId);
+        if (userConfig?.favored) {
+            if (confirm(`确定取消收藏用户 ${username} 吗？`)) {
+                await usersConfigCacheAccess.update(async data => {
+                    delete data[userId];
+                    return data;
+                })
+                toggled = true;
+                favorBtn?.toggle(false);
+            }
+        } else {
+            if (confirm(`确定收藏用户 ${username} 吗？`)) {
+                await usersConfigCacheAccess.update(async data => {
+                    delete data[username]; // 兼容 0.0.13 旧数据
+                    data[userId] = { username, favored: true }
+                    return data;
+                })
+                toggled = true;
+                favorBtn?.toggle(true);
+                blockedBtn?.toggle(false);
+            }
+        }
+        return toggled;
+    }
+
     if (isUserProfilePage) {
         const userProfileElement = document.querySelector('#uhd .mt');
         const userId = extractUidFromURL(currentUrl)
@@ -889,9 +998,8 @@ function findMyUserId() {
             const username = userProfileElement.textContent.trim();
 
             function createUpdateUserButton(value, cls, textA, textB) {
-                const btn = document.createElement('button');
+                const btn = addElem(userProfileElement, 'button', `ese-quick-button ${cls}`)
                 btn.innerText = value ? textA : textB;
-                btn.className = `ese-quick-button ${cls}`;
                 btn.style.marginLeft = '10px';
                 btn.toggle = (value) => {
                     btn.innerText = value ? textA : textB;
@@ -903,55 +1011,21 @@ function findMyUserId() {
             const favorBtn = createUpdateUserButton(userConfig?.favored, 'ese-favorite-button', '取消收藏', '收藏用户');
             const blockedBtn = createUpdateUserButton(userConfig?.blocked, 'ese-block-button', '取消屏蔽', '屏蔽用户');
 
-            favorBtn.addEventListener('click', async () => {
-                const userConfig = await getUserConfig(userId);
+            favorBtn.addEventListener('click', () => favorUser(userId, username, { blockedBtn, favorBtn }));
+            blockedBtn.addEventListener('click', () => blockUser(userId, username, { blockedBtn, favorBtn }));
+        }
+    }
 
-                if (userConfig?.favored) {
-                    if (confirm(`确定取消收藏用户 ${username} 吗？`)) {
-                        await usersConfigCacheAccess.update(async data => {
-                            delete data[userId];
-                            return data;
-                        })
-                        favorBtn.toggle(false);
-                    }
-                } else {
-                    if (confirm(`确定收藏用户 ${username} 吗？`)) {
-                        await usersConfigCacheAccess.update(async data => {
-                            delete data[username]; // 兼容 0.0.13 旧数据
-                            data[userId] = { username, favored: true }
-                            return data;
-                        })
-                        favorBtn.toggle(true);
-                        blockedBtn.toggle(false);
-                    }
-                }
-            });
+    const highlightOrHidePost = (postItem, citeEle, userConfig) => {
+        if (!citeEle) return;
 
-            blockedBtn.addEventListener('click', async () => {
-                const userConfig = await getUserConfig(userId);
-                if (userConfig?.blocked) {
-                    if (confirm(`确定取消屏蔽用户 ${username} 吗？`)) {
-                        await usersConfigCacheAccess.update(async data => {
-                            delete data[userId];
-                            return data;
-                        })
-                        blockedBtn.toggle(false);
-                    }
-                } else {
-                    if (confirm(`确定屏蔽用户 ${username} 吗？`)) {
-                        await usersConfigCacheAccess.update(async data => {
-                            delete data[username]; // 兼容 0.0.13 旧数据
-                            data[userId] = { username, blocked: true }
-                            return data;
-                        })
-                        favorBtn.toggle(false);
-                        blockedBtn.toggle(true);
-                    }
-                }
-            });
+        if (userConfig?.favored) {
+            citeEle.style.fontWeight = 'bold';
+            citeEle.style.color = 'dodgerblue'; // Change color to dodgerblue
+        }
 
-            userProfileElement.appendChild(favorBtn);
-            userProfileElement.appendChild(blockedBtn);
+        if (userConfig?.blocked) {
+            postItem.style.display = 'none';
         }
     }
 
@@ -964,16 +1038,7 @@ function findMyUserId() {
             const topicTimeSpan = postElement.querySelector('span.xi1 span');
             const userId = extractUidFromURL(citeElement.href);
             const userConfig = await getUserConfig(userId, citeElement.textContent.trim(), usersConfigStore);
-
-            if (citeElement && userConfig?.favored) {
-                citeElement.style.fontWeight = 'bold';
-                citeElement.style.color = 'dodgerblue'; // Change color to dodgerblue
-            }
-
-            if (citeElement && userConfig?.blocked) {
-                postItem.style.display = 'none';
-            }
-
+            highlightOrHidePost(postItem, citeElement, userConfig)
             // Highlight today's new posts
             const today = new Date().toISOString().split('T')[0];
             if (topicTimeSpan && topicTimeSpan.title === today) {
@@ -1005,6 +1070,24 @@ function findMyUserId() {
     }
 
     if (isPostListPage) {
+        const highOrHidePostLists = async () => {
+            const usersConfigStore = await usersConfigCacheAccess.read();
+            const postsList = document.querySelectorAll('tbody[id^="normalthread_"]')
+            postsList.forEach(async postItem => {
+                const postElement = postItem.querySelector('tr td.by:nth-child(3)');
+                const citeElement = postElement.querySelector('cite a');
+                const topicTimeSpan = postElement.querySelector('span.xi1 span');
+                const userId = extractUidFromURL(citeElement.href);
+                const userConfig = await getUserConfig(userId, citeElement.textContent.trim(), usersConfigStore);
+                highlightOrHidePost(postItem, citeElement, userConfig)
+                // Highlight today's new posts
+                const today = new Date().toISOString().split('T')[0];
+                if (topicTimeSpan && topicTimeSpan.title === today) {
+                    topicTimeSpan.style.fontWeight = 'bold';
+                }
+            })
+        };
+
         // Initial call to highlight already loaded content
         highOrHidePostLists();
 
@@ -1022,6 +1105,17 @@ function findMyUserId() {
     if (isSearchPage) {
         const threadList = document.querySelectorAll('#threadlist .pbw');
         if (!threadList.length) return;
+
+        const highOrHidePostLists = async (threadList) => {
+            const usersConfigStore = await usersConfigCacheAccess.read();
+            threadList.forEach(async postItem => {
+                const citeElement = postItem.querySelector('p:nth-child(4) span a');
+                const userId = extractUidFromURL(citeElement.href);
+                const userConfig = await getUserConfig(userId, citeElement.textContent.trim(), usersConfigStore);
+
+                highlightOrHidePost(postItem, citeElement, userConfig)
+            })
+        };
 
         const sectionMap = new Map();
 
@@ -1064,10 +1158,6 @@ function findMyUserId() {
             });
         };
 
-        threadList.forEach(processThread);
-
-        applyFilterToNewThreads(threadList);
-
         // 新建 button、更新数值
         const updateFilterButtons = async () => {
             const searchHiddenSections = await searchHiddenSectionsAccess.read();
@@ -1086,35 +1176,28 @@ function findMyUserId() {
         };
 
         const addFilterSectionButton = async (section, fid) => {
-            const searchHiddenSections = await searchHiddenSectionsAccess.read()
-            const button = document.createElement('a');
-            button.className = 'ese-filter-button';
+            let searchHiddenSections = await searchHiddenSectionsAccess.read()
+            const button = addElem(filterContainer, 'a', 'ese-filter-button')
             button.textContent = section.name;
             button.dataset.fid = fid;
             button.classList.toggle('ese-hidden', !!searchHiddenSections[fid]);
 
-            const countElement = document.createElement('span');
-            countElement.className = 'ese-filter-button-count';
+            const _throttled = throttle(async () => {
+                await searchHiddenSectionsAccess.update(async data => {
+                    data[fid] = !data[fid];
+                    button.classList.toggle('ese-hidden', data[fid]);
+                    section.elements.forEach(thread => {
+                        thread.style.display = data[fid] ? 'none' : '';
+                    });
+                    return data
+                })
+            }, 300, { trailing: false }) 
+
+            button.addEventListener('click', _throttled);
+
+            const countElement = insertBeforeElem(button, 'span', 'ese-filter-button-count');
             countElement.textContent = section.elements.length;
-            button.insertBefore(countElement, button.firstChild);
-
-            button.addEventListener('click', async () => {
-                searchHiddenSections[fid] = !searchHiddenSections[fid];
-                button.classList.toggle('ese-hidden', searchHiddenSections[fid]);
-                section.elements.forEach(thread => {
-                    thread.style.display = searchHiddenSections[fid] ? 'none' : '';
-                });
-                await searchHiddenSectionsAccess.update(() => searchHiddenSections)
-            });
-
-            filterContainer.appendChild(button);
         };
-
-        const filterContainer = document.createElement('div');
-        filterContainer.className = 'ese-filter-container';
-        document.body.appendChild(filterContainer);
-
-        updateFilterButtons();
 
         let isLoading = false;
         let lastLoadedTime = Date.now();
@@ -1127,7 +1210,6 @@ function findMyUserId() {
 
             isLoading = true;
             const loadingIndicator = createLoadingIndicator('加载中...');
-            document.body.appendChild(loadingIndicator);
 
             const elapsedTime = Date.now() - lastLoadedTime;
             const waitTime = Math.max(0, LOAD_TIME_LIMIT - elapsedTime);
@@ -1136,13 +1218,27 @@ function findMyUserId() {
                 setTimeout(() => {
                     fetchGetPage(nextPageLink.href)
                         .then(async doc => {
-                            const errorMessage = doc.querySelector('#messagetext.alert_error');
-                            if (errorMessage && errorMessage.textContent.includes('刷新过于频繁')) {
-                                showRetryIndicator();
-                                setTimeout(loadNextPage, LOAD_TIME_LIMIT);
-                                return;
-                            }
+                            const errorMessage = doc.querySelector('#messagetext.alert_error')?.textContent || "";
+                            const emptyMessage = doc.querySelector("#ct .emp")?.textContent || "";
 
+                            if (!errorMessage && !emptyMessage) return doc
+
+                            if (errorMessage.includes('刷新过于频繁')) {
+                                showRetryIndicator();
+                                throw Error('刷新过于频繁');
+                            }
+                            if (emptyMessage.includes('没有找到匹配结果')) {
+                                if(confirm(`搜索页面已过期，是否（等待 ${Math.ceil(LOAD_TIME_LIMIT / 1000)} 秒后）重新搜索？`)) {
+                                    isLoading = true;
+                                    setTimeout(() => {
+                                        document.querySelector("#scform_submit")?.click();
+                                        isLoading = false;
+                                    }, LOAD_TIME_LIMIT)
+                                }
+                            }
+                            return doc
+                        })
+                        .then(async doc => {
                             const newThreads = doc.querySelectorAll('#threadlist .pbw');
                             newThreads.forEach(thread => {
                                 thread.classList.add('ese-fade-in'); // 添加渐入动效类
@@ -1150,18 +1246,25 @@ function findMyUserId() {
                                 processThread(thread);
                             });
 
-                            await applyFilterToNewThreads(newThreads);
-
                             const newPagination = doc.querySelector('.pgs.cl.mbm');
                             const pagination = document.querySelector('.pgs.cl.mbm');
                             if (pagination && newPagination) pagination.replaceWith(newPagination);
 
-                            await updateFilterButtons();
-                            loadingIndicator.remove();
-                            lastLoadedTime = Date.now();
-                        }).finally(() => {
+                            highOrHidePostLists(newThreads);
+
+                            if (mainConfig.enableSectionFilterSearch) {
+                                await applyFilterToNewThreads(newThreads);
+                                await updateFilterButtons();
+                            }
+                        })
+                        .catch(e => {
+                            console.log(e.message) || "未知错误";
+                        })
+                        .finally(() => {
                             resolve()
                             isLoading = false;
+                            lastLoadedTime = Date.now();
+                            loadingIndicator.remove();
                         });
                 }, waitTime);
             })
@@ -1169,7 +1272,6 @@ function findMyUserId() {
 
         const showRetryIndicator = () => {
             const retryIndicator = createLoadingIndicator('翻页过快，即将重试...');
-            document.body.appendChild(retryIndicator);
 
             setTimeout(() => {
                 retryIndicator.remove();
@@ -1193,17 +1295,28 @@ function findMyUserId() {
             });
         };
         
-        const sentinel = document.createElement('div');
+        const sentinel = addElem(document.body, 'div');
         sentinel.style.height = '1px';
-        document.body.appendChild(sentinel);
-        
+
         const loadNextPageObserver = new IntersectionObserver(loadNextPageIfNeeded, {
             root: null,
             rootMargin: '50% 0px',
             threshold: 0
         });
-        
-        loadNextPageObserver.observe(sentinel);
+
+        const filterContainer = addElem(document.body, 'div', 'ese-filter-container');
+
+        highOrHidePostLists(threadList);
+
+        if (mainConfig.enableSectionFilterSearch) {
+            threadList.forEach(processThread);
+            await applyFilterToNewThreads(threadList);
+            await updateFilterButtons();
+        }
+
+        if (mainConfig.enableAutoPaginationSearch) {
+            loadNextPageObserver.observe(sentinel);
+        }
     }
 
     if (mainConfig.enableSortByDateline === true) {
@@ -1215,6 +1328,7 @@ function findMyUserId() {
 
                 event.preventDefault();
                 let url = new URL(link.href, window.location.origin);
+                let target = link.getAttribute('target') || '_self';
 
                 if (url.pathname.includes('forum.php')) {
                     if (!url.searchParams.get("orderby")) {
@@ -1226,7 +1340,7 @@ function findMyUserId() {
                     url = new URL(`/forum.php?mod=forumdisplay&fid=${fid}&filter=author&orderby=dateline`, window.location.origin);
                 }
 
-                window.location.href = url;
+                window.open(url, target);
             });
             document.querySelectorAll('a[rel*="forum.php?mod=forumdisplay"]').forEach(nxt => { // next page
                 let url = new URL(nxt.rel, window.location.origin);
@@ -1235,6 +1349,41 @@ function findMyUserId() {
             })
         }
         setCustomSectionLink()
+    }
+
+    const isThreadPage = /\/(?:forum\.php\?mod=viewthread&tid=|thread-)(\d+).*/.test(currentUrl);
+    if (isThreadPage) {
+        document.querySelectorAll("table[id^=pid]").forEach(async thread => {
+            const userInfoEle = thread.querySelector('div[id^=favatar] .authi a')
+            const userId = extractUidFromURL(userInfoEle.href);
+            const username = userInfoEle.textContent.trim();
+            const userConfig = await getUserConfig(userId, username);
+
+            if (userInfoEle && userConfig?.favored) {
+                userInfoEle.style.fontWeight = 'bold';
+                userInfoEle.style.color = 'dodgerblue'; // Change color to dodgerblue
+            }
+            if (userInfoEle && userConfig?.blocked) {
+                thread.style.display = 'none';
+            }
+
+            const userInfoContainer = thread.querySelector('div[id^=favatar] .authi')
+            const favorUserBtn = addElem(userInfoContainer, 'a', 'ese-thread-userinfo-button')
+            favorUserBtn.textContent = ' ➕';
+            favorUserBtn.addEventListener('click', async () => {
+                const toggled = await favorUser(userId, username)
+                toggled && location.reload();
+            })
+
+            const bottomBtnContainer = thread.querySelector('tbody td.plc .pob.cl')
+            const p = addElem(bottomBtnContainer, 'p')
+            const blockUserBtn = addElem(p, 'a', 'ese-thread-bottom-button')
+            blockUserBtn.textContent = '屏蔽用户'
+            blockUserBtn.addEventListener('click', async () => {
+                const toggled = await blockUser(userId, username)
+                toggled && location.reload();
+            });
+        })
     }
 
     const initConfigPanel = () => {
@@ -1277,6 +1426,11 @@ function findMyUserId() {
             putCheckBoxItem('帖子按时间排序', 'enableSortByDateline');
             addElem(configList, 'dt', 'ese-config-item-tip ese-config-item-lv2').textContent = '💡 板块内帖子按时间排序（默认关闭。目前仅支持全部开启或全部关闭，后续将支持按常用分区配置）';
 
+            addElem(configList, 'dt', 'ese-config-item-sep ese-config-item-lv1').textContent = '搜索设置';
+            putCheckBoxItem('板块筛选', 'enableSectionFilterSearch');
+            addElem(configList, 'dt', 'ese-config-item-tip ese-config-item-lv2').textContent = '💡 按板块隐藏不想看的帖子';
+            putCheckBoxItem('自动翻页', 'enableAutoPaginationSearch');
+
             async function renderUserList(heading, listClass, filterKey, clickIconText, confirmMessage) {
                 const listHeading = addElem(configList, 'h5', null, { style: 'line-height:32px;' });
                 addElem(listHeading, 'span').textContent = heading;
@@ -1317,6 +1471,7 @@ function findMyUserId() {
                     });
             }
             
+            addElem(configList, 'dt', 'ese-config-item-sep ese-config-item-lv1').textContent = '用户管理';
             renderUserList('收藏用户管理', 'ese-nickname-list', 'favored', '🔖', '取消收藏');
             renderUserList('屏蔽用户管理', 'ese-user-blacklist', 'blocked', '🚫', '取消屏蔽');
 
@@ -1484,7 +1639,7 @@ async function fetchGetPage(url, docType, autoRetry) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(content, docType || 'text/html');
     if (autoRetry) {
-        if (findErrorMessage(doc) === '刷新过于频繁，请3秒后再试。') {
+        if (findErrorMessage(doc).includes('刷新过于频繁')) {
             await sleep(LOAD_TIME_LIMIT);
             return await fetchGetPage(url, docType, false);
         }
@@ -1493,13 +1648,19 @@ async function fetchGetPage(url, docType, autoRetry) {
 }
 
 function findErrorMessage(doc) {
-    let err = doc.querySelector('#messagetext > p');
+    let err = doc.querySelector('#messagetext.alert_error');
     return err ? err.textContent.trim() || '不明错误' : null;
 }
 
 function addElem(parent, tag, styleClass, attrs) {
     const elem = newElem(tag, styleClass, attrs);
     parent.appendChild(elem);
+    return elem;
+}
+
+function insertBeforeElem(parent, tag, styleClass, attrs) {
+    const elem = newElem(tag, styleClass, attrs);
+    parent.insertBefore(elem, parent?.firstChild);
     return elem;
 }
 
@@ -1632,3 +1793,11 @@ function closePopupMenu(popupId) {
         menu.remove();
     }
 }
+
+/**
+ * Minified by jsDelivr using Terser v5.19.2.
+ * Original file: /npm/lodash.throttle@4.1.1/index.js
+ *
+ * Do NOT use SRI with dynamically generated files! More information: https://www.jsdelivr.com/using-sri-with-dynamic-files
+ */
+var FUNC_ERROR_TEXT="Expected a function",NAN=NaN,symbolTag="[object Symbol]",reTrim=/^\s+|\s+$/g,reIsBadHex=/^[-+]0x[0-9a-f]+$/i,reIsBinary=/^0b[01]+$/i,reIsOctal=/^0o[0-7]+$/i,freeParseInt=parseInt,freeGlobal="object"==typeof global&&global&&global.Object===Object&&global,freeSelf="object"==typeof self&&self&&self.Object===Object&&self,root=freeGlobal||freeSelf||Function("return this")(),objectProto=Object.prototype,objectToString=objectProto.toString,nativeMax=Math.max,nativeMin=Math.min,now=function(){return root.Date.now()};function debounce(t,e,n){var r,i,o,a,u,f,c=0,l=!1,b=!1,s=!0;if("function"!=typeof t)throw new TypeError(FUNC_ERROR_TEXT);function v(e){var n=r,o=i;return r=i=void 0,c=e,a=t.apply(o,n)}function m(t){var n=t-f;return void 0===f||n>=e||n<0||b&&t-c>=o}function y(){var t=now();if(m(t))return j(t);u=setTimeout(y,function(t){var n=e-(t-f);return b?nativeMin(n,o-(t-c)):n}(t))}function j(t){return u=void 0,s&&r?v(t):(r=i=void 0,a)}function g(){var t=now(),n=m(t);if(r=arguments,i=this,f=t,n){if(void 0===u)return function(t){return c=t,u=setTimeout(y,e),l?v(t):a}(f);if(b)return u=setTimeout(y,e),v(f)}return void 0===u&&(u=setTimeout(y,e)),a}return e=toNumber(e)||0,isObject(n)&&(l=!!n.leading,o=(b="maxWait"in n)?nativeMax(toNumber(n.maxWait)||0,e):o,s="trailing"in n?!!n.trailing:s),g.cancel=function(){void 0!==u&&clearTimeout(u),c=0,r=f=i=u=void 0},g.flush=function(){return void 0===u?a:j(now())},g}function throttle(t,e,n){var r=!0,i=!0;if("function"!=typeof t)throw new TypeError(FUNC_ERROR_TEXT);return isObject(n)&&(r="leading"in n?!!n.leading:r,i="trailing"in n?!!n.trailing:i),debounce(t,e,{leading:r,maxWait:e,trailing:i})}function isObject(t){var e=typeof t;return!!t&&("object"==e||"function"==e)}function isObjectLike(t){return!!t&&"object"==typeof t}function isSymbol(t){return"symbol"==typeof t||isObjectLike(t)&&objectToString.call(t)==symbolTag}function toNumber(t){if("number"==typeof t)return t;if(isSymbol(t))return NAN;if(isObject(t)){var e="function"==typeof t.valueOf?t.valueOf():t;t=isObject(e)?e+"":e}if("string"!=typeof t)return 0===t?t:+t;t=t.replace(reTrim,"");var n=reIsBinary.test(t);return n||reIsOctal.test(t)?freeParseInt(t.slice(2),n?2:8):reIsBadHex.test(t)?NAN:+t};
