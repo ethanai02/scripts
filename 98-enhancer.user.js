@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         色花堂 98堂 强化脚本
 // @namespace    http://tampermonkey.net/
-// @version      0.2.0
+// @version      0.2.1
 // @description  加强论坛功能
 // @license      MIT
 // @author       98_ethan
@@ -41,6 +41,11 @@
 // @match        *://*.r88d8.com/*
 // @match        *://*.z0gfi.com/*
 // @match        *://*.xj4sds.com/*
+// @match        *://*.5rmt2.net/*
+// @match        *://*.n8cv.net/*
+// @match        *://*.wbx0x.com/*
+// @match        *://*.6yddw.com/*
+// @match        *://*.1b0d2.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
@@ -63,7 +68,7 @@
 // ==/UserScript==
 
 const VERSION_MAJOR = 0.2;
-const VERSION_TEXT = '0.2.0';
+const VERSION_TEXT = '0.2.1';
 
 function initGM() {
     let gmExists = false;
@@ -276,7 +281,8 @@ function isCommonJsLoaded() {
     const GM = initGM();
 
     const INTRO_POST = document.location.origin + '/forum.php?mod=viewthread&tid=2251912';
-    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=27387253';
+    const UPDATE_NOTE = document.location.origin + '/forum.php?mod=redirect&goto=findpost&ptid=2251912&pid=28300683';
+
     const CONFIG_PAGE = document.location.origin + '/home.php?mod=spacecp&ac=enhancer';
 
     GM.registerMenuCommand('打开功能简介帖', () => GM.openInTab(INTRO_POST, false));
@@ -444,7 +450,7 @@ function isCommonJsLoaded() {
 @media only screen and (max-width: 1280px) {
     .ese-quick-button-container, .ese-filter-container {
         left: unset;
-        right: 9px;
+        right: 3px;
         max-height: 550px;
     }
     .ese-quick-button-container.ese-quick-button-container-left {
@@ -682,7 +688,7 @@ function isCommonJsLoaded() {
                                     updateUserConfig.initFavorRecords = true;
                                     return updateUserConfig
                                 })
-                                throw Error("收藏信息过期，请刷新页面更新数据")
+                                throw Error("收藏信息过期，正在后台更新数据...")
                             }
                             if (scriptContent.includes(FAV_SUCCESS_TEXT)) {
                                 const match = scriptContent.match(/'id':'(\d+)'[^]*'favid':'(\d+)'/);
@@ -733,7 +739,7 @@ function isCommonJsLoaded() {
                     });
                 });
                 observeRateForm();
-                observeRateLoadingElement(async () => {
+                observeLoadingElement(async () => {
                     await ratedThreadsCacheAccess.update(cache => {
                         if (cache && cache.data) {
                             cache.data[tid] = true;
@@ -743,7 +749,10 @@ function isCommonJsLoaded() {
                 });
             }
         },
-        { selector: '.locked a[href*="action=pay"', text: '💰 购买', onClick: (element) => element.click() },
+        { selector: '.locked a[href*="action=pay"', text: '💰 购买', onClick: (element) => {
+            element.click();
+            observeLoadingElement()
+        }},
         { selector: '.locked a[href*="action=reply"]', text: '🔒 回复', onClick: (element) => element.click() }, // 回复解锁
         { selector: '.blockcode', text: '🧲 链接' },
     ];
@@ -833,7 +842,7 @@ function isCommonJsLoaded() {
         })
     }
 
-    const observeRateLoadingElement = async (cb) => {
+    const observeLoadingElement = async (cb) => {
         let loadingElementVisible = false;
 
         const loadingObserver = new MutationObserver(async (mutations, observer) => {
